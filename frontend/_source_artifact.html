@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkWorld — Merchandise Planning &amp; Operations</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+<style>
+:root{ color-scheme: light;
+  --navy:#1F2A44; --blue:#2E5BFF; --bg:#F4F8FE; --line:#D7E1F2; --txt:#1c2333; --sub:#5a6880;
+  --green:#1E9E5A; --orange:#C55A11; --red:#C0392B; --purple:#7C4DBE; }
+*{box-sizing:border-box; margin:0; padding:0;}
+body{font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:var(--txt);
+  background:
+   linear-gradient(var(--line) 1px, transparent 1px),
+   linear-gradient(90deg, var(--line) 1px, transparent 1px),
+   linear-gradient(180deg,#FDFEFF 0%, #EAF1FC 100%);
+  background-size:44px 44px,44px 44px,100% 100%; min-height:100vh; font-size:14px;}
+.mono{font-family:'SFMono-Regular',Consolas,'Courier New',monospace;}
+.topbar{background:var(--navy); color:#fff; padding:0 18px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; position:sticky; top:0; z-index:50;}
+.brand{font-weight:800; font-size:17px; padding:12px 0; letter-spacing:-0.2px;}
+.brand span{font-weight:400;}
+.appmeta{font-size:11.5px; color:#c9d3e8; border-left:1px solid #3a4763; padding-left:14px;}
+.appmeta .tag{font-family:Consolas,monospace; color:#8fa3d0;}
+.nav{display:flex; gap:2px; margin-left:auto; flex-wrap:wrap; padding:6px 0;}
+.nav button{background:transparent; border:none; color:#c9d3e8; padding:7px 9px; border-radius:8px; cursor:pointer; font-size:12px; display:flex; gap:5px; align-items:center;}
+.nav button .n{color:#7d8db2; font-family:Consolas,monospace; font-size:10.5px;}
+.nav button:hover{background:#2b3a5e; color:#fff;}
+.nav button.active{background:var(--blue); color:#fff;}
+.nav button.active .n{color:#cfdaff;}
+.nav button .stub{font-size:8.5px; background:#3a4763; color:#aebadb; border-radius:4px; padding:1px 4px;}
+.wrap{max-width:1240px; margin:0 auto; padding:22px 22px 60px;}
+.crumb{font-family:Consolas,monospace; font-size:11px; color:var(--blue); letter-spacing:1px; margin-bottom:4px;}
+h1{font-size:26px; letter-spacing:-0.5px; margin-bottom:2px;}
+.subtitle{color:var(--sub); margin-bottom:18px; font-size:13px;}
+.card{background:#fff; border:1px solid #E3EAF6; border-radius:12px; padding:16px 18px; box-shadow:0 1px 3px rgba(31,42,68,.06); position:relative;}
+.card h3{font-size:14.5px; margin-bottom:2px;}
+.card .hint{font-size:12px; color:var(--sub); margin-bottom:10px;}
+.focus::before,.focus::after{content:''; position:absolute; width:16px; height:16px; border:2.5px solid var(--navy);}
+.focus::before{top:-6px; left:-6px; border-right:none; border-bottom:none;}
+.focus::after{bottom:-6px; right:-6px; border-left:none; border-top:none;}
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px;}
+.kpi{background:#fff; border:1px solid #E3EAF6; border-radius:12px; padding:12px 14px; box-shadow:0 1px 3px rgba(31,42,68,.06);}
+.kpi .lbl{font-size:10.5px; text-transform:uppercase; letter-spacing:.7px; color:var(--sub);}
+.kpi .val{font-size:22px; font-weight:700; margin-top:3px; letter-spacing:-0.5px;}
+.kpi .sub{font-size:11px; color:var(--sub); margin-top:2px;}
+.kpi.good .val{color:var(--green);} .kpi.warn .val{color:var(--orange);} .kpi.bad .val{color:var(--red);}
+table{width:100%; border-collapse:collapse; font-size:12.5px;}
+th{background:var(--navy); color:#fff; text-align:left; padding:7px 9px; font-weight:600; font-size:11px; letter-spacing:.4px; position:sticky; top:0;}
+td{padding:6px 9px; border-bottom:1px solid #EDF2FA; vertical-align:top;}
+tr:hover td{background:#F5F8FF;}
+.tblwrap{max-height:420px; overflow:auto; border:1px solid #E3EAF6; border-radius:8px;}
+.chip{display:inline-block; padding:1.5px 8px; border-radius:99px; font-size:10.5px; font-weight:600;}
+.chip.red{background:#FBE9E7; color:var(--red);} .chip.orange{background:#FDF0E5; color:var(--orange);}
+.chip.green{background:#E7F6EC; color:var(--green);} .chip.blue{background:#E8EEFF; color:var(--blue);}
+.chip.gray{background:#EEF1F6; color:#6b7690;} .chip.purple{background:#F1EAFB; color:var(--purple);}
+.num{text-align:right; font-variant-numeric:tabular-nums;}
+.chartbox{height:280px; position:relative;}
+.chartbox.tall{height:340px;}
+.row2{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+.row37{display:grid; grid-template-columns:5fr 4fr; gap:14px;}
+@media(max-width:900px){.row2,.row37{grid-template-columns:1fr;}}
+.loading{color:var(--sub); font-size:13px; padding:30px; text-align:center; font-family:Consolas,monospace;}
+.err{color:var(--red); font-size:12px; padding:14px; white-space:pre-wrap;}
+.stubgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px;}
+.phase{font-family:Consolas,monospace; font-size:10.5px; color:var(--purple); background:#F1EAFB; padding:2px 8px; border-radius:5px; display:inline-block; margin-bottom:8px;}
+footer{color:#8a97b0; font-size:11.5px; padding:26px 22px; display:flex; justify-content:space-between; max-width:1240px; margin:0 auto;}
+footer b{color:var(--navy); font-weight:800;}
+ul.feat{margin:6px 0 0 16px; color:var(--sub); font-size:12.5px;}
+ul.feat li{margin-bottom:4px;}
+.mt{margin-top:14px;}
+.controls{display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center;}
+.controls label{font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; color:var(--sub); display:block; margin-bottom:3px;}
+.controls select{border:1px solid #C9D6EC; border-radius:8px; padding:6px 8px; font-size:12.5px; background:#fff; color:var(--txt); min-width:130px;}
+.legend{display:flex; gap:14px; font-size:11px; color:var(--sub); margin-top:8px; flex-wrap:wrap; align-items:center;}
+.dot{display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:-1px;}
+#svgmap circle.store{cursor:pointer; transition:opacity .15s;}
+#svgmap circle.store:hover{opacity:.75;}
+#svgmap circle.sel{stroke:#1F2A44; stroke-width:2.5;}
+.maptip{position:absolute; pointer-events:none; background:var(--navy); color:#fff; font-size:11.5px; padding:6px 9px; border-radius:7px; display:none; z-index:10; max-width:230px;}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">{solution<span>set}</span></div>
+  <div class="appmeta">WorkWorld — Merchandise Planning &amp; Ops · FY2026 · <span class="tag">WW-2026-DEMO-BASE</span> · <span class="tag">BUILD v0-0006</span></div>
+  <nav class="nav" id="nav"></nav>
+</div>
+<div class="wrap" id="main"></div>
+<footer><div>WorkWorld — Gart Companies · Demo environment (dummy data, anchor 2026-07-14) · SolutionSet Merch Ops Platform</div><div><b>{solution</b>set}</div></footer>
+
+<script>
+const TOOL='mcp__5b8943b8-f7ab-4309-85c6-fc952b94848a__execute_sql_read_only';
+const POLL='mcp__5b8943b8-f7ab-4309-85c6-fc952b94848a__poll_sql_result';
+const S='sset1000.supplychain';
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function runQ(sql){
+  let r=await window.cowork.callMcpTool(TOOL,{query:sql});
+  let p=r.structuredContent ?? JSON.parse(r.content[0].text);
+  let n=0;
+  while(p.status && (p.status.state==='PENDING'||p.status.state==='RUNNING') && n<40){
+    await sleep(1500);
+    const pr=await window.cowork.callMcpTool(POLL,{statement_id:p.statement_id});
+    p=pr.structuredContent ?? JSON.parse(pr.content[0].text); n++;
+  }
+  if(!p.status||p.status.state!=='SUCCEEDED') throw new Error('Query failed: '+JSON.stringify((p.status&&p.status.error)||p.status));
+  const cols=p.manifest.schema.columns.map(c=>c.name);
+  const arr=(p.result&&(p.result.data_array||p.result.data_typed_array))||[];
+  return arr.map(row=>Object.fromEntries(row.values.map((v,i)=>[cols[i], v.string_value ?? v.str ?? null])));
+}
+const fmt$=x=>x==null?'—':'$'+Number(x).toLocaleString('en-US',{maximumFractionDigits:0});
+const fmtN=x=>x==null?'—':Number(x).toLocaleString('en-US',{maximumFractionDigits:0});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const uniq=a=>[...new Set(a)].filter(x=>x!=null&&x!=='');
+const SIZE_ORDER=['XS','S','M','L','XL','2XL','3XL','OS'];
+function sizeSort(a,b){
+  const ia=SIZE_ORDER.indexOf(a), ib=SIZE_ORDER.indexOf(b);
+  if(ia>=0&&ib>=0) return ia-ib;
+  if(ia>=0) return -1; if(ib>=0) return 1;
+  const na=parseFloat(a), nb=parseFloat(b);
+  if(!isNaN(na)&&!isNaN(nb)&&!a.includes('x')&&!b.includes('x')) return na-nb;
+  return String(a).localeCompare(String(b),undefined,{numeric:true});
+}
+const MODULES=[
+ {id:'command', n:1, label:'Command Center', stub:false},
+ {id:'demand', n:2, label:'Demand Planning', stub:false},
+ {id:'replen', n:3, label:'Replenishment', stub:false},
+ {id:'ats', n:4, label:'Vendor ATS', stub:false},
+ {id:'deals', n:5, label:'Vendor Deals', stub:false},
+ {id:'match', n:6, label:'PO & 3-Way', stub:false},
+ {id:'pricing', n:7, label:'Pricing', stub:false},
+ {id:'markdown', n:8, label:'Markdown', stub:false},
+ {id:'comms', n:9, label:'Team Comms', stub:false},
+ {id:'admin', n:10, label:'Data Health', stub:false},
+];
+const loaded={}; const charts={};
+function nav(){
+  const el=document.getElementById('nav');
+  el.innerHTML=MODULES.map(m=>`<button data-m="${m.id}" ${m.id==='command'?'class="active"':''}><span class="n">${m.n}</span>${m.label}${m.stub?'<span class="stub">SPEC</span>':''}</button>`).join('');
+  el.querySelectorAll('button').forEach(b=>b.onclick=()=>show(b.dataset.m));
+}
+function header(m,title,sub){
+  return `<div class="crumb">{ MODULE ${m.n} OF 10 · ${m.stub?'DESIGN SPEC':'LIVE — DATABRICKS'} }</div><h1>${title}</h1><div class="subtitle">${sub}</div>`;
+}
+function show(id){
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.m===id));
+  document.querySelectorAll('.module').forEach(d=>d.style.display=d.id==='mod-'+id?'':'none');
+  if(!loaded[id]){loaded[id]=true; LOADERS[id]&&LOADERS[id]().catch(e=>{
+    const el=document.querySelector('#mod-'+id+' .autoload'); if(el) el.innerHTML='<div class="err">'+esc(e.message)+'</div>'; console.error(e);
+  });}
+}
+function table(rows, cols){
+  if(!rows.length) return '<div class="loading">No rows.</div>';
+  const head=cols.map(c=>`<th>${c.h}</th>`).join('');
+  const body=rows.map(r=>'<tr>'+cols.map(c=>`<td class="${c.num?'num':''}">${c.f?c.f(r):esc(r[c.k])}</td>`).join('')+'</tr>').join('');
+  return `<div class="tblwrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+function statusChip(s){
+  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue'};
+  return `<span class="chip ${map[s]||'gray'}">${esc(s)}</span>`;
+}
+function build(){
+  const main=document.getElementById('main');
+  main.innerHTML=MODULES.map(m=>`<div class="module" id="mod-${m.id}" style="${m.id==='command'?'':'display:none'}">${SHELLS[m.id](m)}</div>`).join('');
+}
+function stub(items){
+  return `<div class="stubgrid">`+items.map(i=>`<div class="card"><span class="phase">${i[2]}</span><h3>${i[0]}</h3><div class="hint" style="margin-top:6px">${i[1]}</div></div>`).join('')+`</div>`;
+}
+const SHELLS={
+command:m=>header(m,'Command Center','Value-driver KPIs across the network — stockouts, turns, margin, reconciliation. All figures live from sset1000.supplychain.')+`
+  <div class="kpis autoload" id="kpirow"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="row2">
+    <div class="card focus"><h3>Weekly sales &amp; rain-day contribution</h3><div class="hint">Trailing 12 months · POS net sales with rain-event days split out.</div><div class="chartbox"><canvas id="ch-trend"></canvas></div></div>
+    <div class="card"><h3>Weekly margin dollars</h3><div class="hint">Gross margin with promo share.</div><div class="chartbox"><canvas id="ch-margin"></canvas></div></div>
+  </div>`,
+demand:m=>header(m,'Demand Planning','Forecasted demand becomes purchase timing: slice the timeline, layer the weather signal where there is still time to react, and generate the PO proposal.')+`
+  <div class="card focus autoload" id="tlcard">
+    <h3>Demand &amp; purchase timeline</h3>
+    <div class="hint">Stacked weekly forecast, sliceable by category / brand / vendor / location. Switch the axis to <b>Order-by week</b> to see when purchases must be placed (demand shifted back by each vendor's observed lead time). The weather layer splits into reactable (order window still open) vs missed (lead time already passed).</div>
+    <div class="controls" id="tl-controls"></div>
+    <div class="chartbox tall"><canvas id="ch-tl"></canvas></div>
+    <div class="legend" id="tl-note"></div>
+  </div>
+  <div class="card mt">
+    <h3>Weekly demand matrix — weeks x categories</h3>
+    <div class="hint">Each row a week, each column a category. Toggle units vs dollars; filter by region or store. Shading scales within each column.</div>
+    <div class="controls" id="mx-controls"></div>
+    <div id="mx-table"><div class="loading">{ LOADING }</div></div>
+  </div>
+  <div class="card mt focus">
+    <h3>Proposed PO generator</h3>
+    <div class="hint">Order qty per store x SKU = forecast over the horizon (+ weather if layered) + safety stock − current position (on hand + on order + in transit), rolled up to one master PO per vendor. Export the list as CSV for review or EDI staging.</div>
+    <div class="controls" id="po-controls"></div>
+    <div id="po-out"><div class="loading" style="padding:14px">{ SET CONTROLS AND GENERATE }</div></div>
+  </div>
+  <div class="card mt">
+    <h3>Sales by size vs forecast by size</h3>
+    <div class="hint">Avg weekly actual units (last 8 wks) against the model's weekly forecast, with the size-curve expected share overlaid. Red size labels are meat sizes.</div>
+    <div class="controls" id="sd-controls"></div>
+    <div class="chartbox tall"><canvas id="ch-size"></canvas></div>
+    <div class="legend" id="sd-note"></div>
+  </div>`,
+replen:m=>header(m,'Purchase Planning & Replenishment','Continuous ROP review, size-run break detection, transfer-first suggestions, PO consolidation to tier breaks — and the network map.')+`
+  <div class="kpis autoload" id="rep-kpis"></div>
+  <div class="card focus">
+    <h3>Network variance map</h3>
+    <div class="hint">Bubble size = magnitude. Pick a metric and slice by category / brand / size; click a store to break its variance down on the right.</div>
+    <div class="controls" id="map-controls"></div>
+    <div class="row37">
+      <div style="position:relative"><div id="svgmap"></div><div class="maptip" id="maptip"></div></div>
+      <div><div id="map-side"><div class="loading">{ SELECT A STORE }</div></div></div>
+    </div>
+    <div class="legend" id="map-legend"></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Receipt date variance — every PO receipt, 12 months</h3><div class="hint">Days late (+) or early (−) vs quoted lead time. The drift is the lead-time forecasting problem: quoted lead times are systematically optimistic.</div><div class="chartbox"><canvas id="ch-lt-scatter"></canvas></div></div>
+    <div class="card"><h3>Quoted vs actual lead time by vendor</h3><div class="hint">Median and P90 actual vs the lead time we plan with. Planning at quoted = built-in stockouts; the engine plans at observed P50 with P90 safety.</div><div class="chartbox"><canvas id="ch-lt-vendor"></canvas></div></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Size-run health by store</h3><div class="hint">Style/color runs: intact vs fringe vs meat-size breaks.</div><div class="chartbox"><canvas id="ch-runs"></canvas></div></div>
+    <div class="card"><h3>Suggestion queue — most urgent</h3><div class="hint">Ordered by projected stockout date.</div><div id="rep-tbl"><div class="loading">{ LOADING }</div></div></div>
+  </div>`,
+ats:m=>header(m,'Vendor Availability (ATS)','What vendors can actually ship — EDI 846 for Tier A, portal pulls for Tier B, parsed email for Tier C.')+`
+  <div class="card focus autoload" id="ats-tbl"><div class="loading">{ LOADING }</div></div>
+  <div class="card mt"><h3>Acquisition plan</h3><ul class="feat">
+    <li><b>Tier A (live):</b> Carhartt &amp; Wolverine EDI 846 via existing SPS Commerce pipe</li>
+    <li><b>Tier B (Phase 2):</b> portal downloads / credentialed RPA</li>
+    <li><b>Tier C (opportunistic):</b> parsed email sheets, human-confirmed</li></ul></div>`,
+deals:m=>header(m,'Vendor Programs & Opportunity Buys','Tier-break coordination, closeouts, SMUs, preseason books — AI-scored for margin uplift vs weeks-of-supply risk.')+`
+  <div class="kpis autoload" id="deal-kpis"></div>
+  <div class="card focus" id="deal-tbl"><div class="loading">{ LOADING }</div></div>`,
+match:m=>header(m,'PO Management & 3-Way Reconciliation','Master PO → per-store mini-POs → store receivers → master statements, matched at line level nightly. The longest step of the close, made a queue instead of a project.')+`
+  <div class="kpis autoload" id="m-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus">
+    <h3>Document explorer — one vendor buy, end to end</h3>
+    <div class="hint">Pick a master PO to walk the direct-to-store tree: every mini-PO, its receipt, its invoice, its statement, and what the match engine found. This is the "single PO table" answer to the monthly-close quagmire.</div>
+    <div class="controls" id="doc-controls"></div>
+    <div id="doc-summary"></div>
+    <div id="doc-tree"><div class="loading">{ LOADING }</div></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Variance identified vs recovered by month</h3><div class="hint">The recovery engine at work — line = auto-clear rate (right axis).</div><div class="chartbox"><canvas id="ch-mtrend"></canvas></div></div>
+    <div class="card"><h3>Open exception aging &amp; root cause</h3><div class="hint">Aging buckets by count; donut = open $ by cause. Old exceptions are the close-cycle killers.</div><div class="row2"><div class="chartbox" style="height:240px"><canvas id="ch-mage"></canvas></div><div class="chartbox" style="height:240px"><canvas id="ch-var"></canvas></div></div></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Master statement reconciliation</h3><div class="hint">Pay-file gate: a statement is payable only when its exceptions are closed — or paid net of debit memos.</div><div id="m-stmt"><div class="loading">{ LOADING }</div></div></div>
+    <div class="card"><h3>Exception queue</h3><div class="hint">AI-suggested resolutions; human accountability retained.</div><div id="m-tbl"><div class="loading">{ LOADING }</div></div></div>
+  </div>`,
+pricing:m=>header(m,'Pricing & Promotion','Vendor price files in → staged ERP updates out. Every event carries its margin impact, its pre-buy option, and its store execution trail.')+`
+  <div class="kpis autoload" id="pr-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
+  <div class="row2 mt">
+    <div class="card"><h3>Margin impact preview — Carhartt increase, effective 8/1</h3><div class="hint">Cost +5.5%, retail +10% staged from the vendor 832 file. Bars: margin % before vs after. The follow-the-retail decision is explicit, not accidental.</div><div class="chartbox"><canvas id="ch-pr-impact"></canvas></div><div class="legend" id="pr-impact-note"></div></div>
+    <div class="card"><h3>Pre-buy option — announced increases</h3><div class="hint">Buy at today's cost before the effective date, capped at a 6-weeks-of-supply guardrail so a price play never becomes a markdown problem.</div><div class="chartbox"><canvas id="ch-pr-prebuy"></canvas></div><div class="legend" id="pr-prebuy-note"></div></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card" id="pr-prebuy-tbl"><div class="loading">{ LOADING }</div></div>
+    <div class="card"><h3>Price file ingestion — by vendor tier</h3><div class="hint">How price updates reach staging. Nothing touches the ERP without an approval click.</div><div id="pr-sources"><div class="loading">{ LOADING }</div></div>
+      <ul class="feat" style="margin-top:10px">
+        <li><b>Stage → approve → ERP:</b> diffs land against price_master; a buyer approves; the app writes back (or hands a file to the ERP import).</li>
+        <li><b>Execution trail:</b> approved events auto-spawn retag/label tasks per store and an LLM-drafted change digest (Module 9).</li>
+        <li><b>Promo orchestration:</b> PromoStart/PromoEnd events coordinate POS price, endcap task, and label windows.</li></ul></div>
+  </div>`,
+markdown:m=>header(m,'Markdown Management','Fewer, later, smarter markdowns: sell-through triggers the ladder, the floor protects margin, experiments tune the timing, and stores get the label files.')+`
+  <div class="kpis autoload" id="md-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus">
+    <h3>Rainwear season — sell-through vs the ladder</h3>
+    <div class="hint">Weekly units (bars) and cumulative sell-through (line, right axis) against the MD-001 trigger. Orange markers = ladder steps. The question the chart answers: did we mark down because the season said so, or because the calendar did?</div>
+    <div class="chartbox tall"><canvas id="ch-md-season"></canvas></div>
+    <div class="legend" id="md-season-note"></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Ladder economics vs the floor</h3><div class="hint">Margin % at each step for the style selected — red bars breach the policy floor (dashed line): those steps clear inventory but destroy margin, so the win is never needing them.</div>
+      <div class="controls" id="md-ladder-controls"></div>
+      <div class="chartbox"><canvas id="ch-md-ladder"></canvas></div></div>
+    <div class="card"><h3>Policy board</h3><div class="hint">Ladders by scope with triggers and floors. MD-004 is the delayed-ladder test variant.</div><div id="md-policies"><div class="loading">{ LOADING }</div></div></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Timing experiments — what the tests say</h3><div class="hint">Markdown timing is a testable hypothesis, not a habit. AI summarizes each test and recommends the rollout decision.</div><div id="md-exps"><div class="loading">{ LOADING }</div></div></div>
+    <div class="card"><h3>Markdown execution trail</h3><div class="hint">Each markdown event spawns per-store label files and checklist tasks — printed locally, tracked to completion.</div><div id="md-events"><div class="loading">{ LOADING }</div></div></div>
+  </div>`,
+comms:m=>header(m,'Team Communications & Store Tasks','LLM-drafted, human-approved comms; store checklists with overdue escalation.')+`
+  <div class="kpis autoload" id="c-kpis"></div>
+  <div class="card focus" id="c-tbl"><div class="loading">{ LOADING }</div></div>`,
+admin:m=>header(m,'Admin & Data Health','Feed freshness, crossref completeness, manual-table stewardship — housekeeping made visible.')+`
+  <div class="card focus autoload" id="a-tbl"><div class="loading">{ LOADING }</div></div>`,
+};
+// ---------------- shared chart helper ----------------
+function mkChart(id,type,data,extra){
+  const el=document.getElementById(id); if(!el) return;
+  if(charts[id]) charts[id].destroy();
+  charts[id]=new Chart(el,{type,data,options:Object.assign({responsive:true,maintainAspectRatio:false,
+    plugins:Object.assign({legend:{labels:{boxWidth:12,font:{size:11}}}},(extra&&extra.plugins)||{}),
+    scales:(extra&&extra.scales)||undefined,
+    indexAxis:(extra&&extra.indexAxis)||undefined,
+    onClick:(extra&&extra.onClick)||undefined},{})});
+}
+// ---------------- map ----------------
+const STATE_SHAPES={
+ CA:[[42,-124.4],[42,-120],[39,-120],[35,-114.63],[34.3,-114.13],[32.7,-114.5],[32.53,-117.13],[33.7,-118.3],[34.45,-120.65],[36.3,-121.9],[37.8,-122.5],[39.8,-123.8],[41,-124.15]],
+ NV:[[42,-120],[42,-114.04],[37,-114.04],[35,-114.63],[39,-120]],
+ OR:[[46.25,-124.05],[46.2,-116.95],[42,-117.02],[42,-124.4]],
+ WA:[[49,-123.2],[49,-117.03],[46.2,-116.95],[46.25,-124.05],[47.35,-124.7],[48.35,-124.7],[48.25,-123.1]],
+};
+function proj(lat,lon){ const x=(lon+125.2)*46, y=(49.6-lat)*40; return [x,y]; }
+function mapSVG(stores, metric, valueOf, selected){
+  const vals=stores.map(valueOf);
+  const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),0.001);
+  const shapes=Object.entries(STATE_SHAPES).map(([st,pts])=>{
+    const d=pts.map((p,i)=>(i?'L':'M')+proj(p[0],p[1]).map(v=>v.toFixed(1)).join(',')).join(' ')+' Z';
+    return `<path d="${d}" fill="#EDF3FC" stroke="#C9D6EC" stroke-width="1.2"/>`;
+  }).join('');
+  const dots=stores.map((s,i)=>{
+    const [x,y]=proj(+s.latitude,+s.longitude);
+    const v=vals[i];
+    const r=4+16*Math.sqrt(Math.abs(v)/maxAbs);
+    const col = metric==='var' ? (v<0?'#C0392B':'#1E9E5A') : (v>0?'#C0392B':'#9fb0cc');
+    return `<circle class="store ${selected===s.store_id?'sel':''}" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${col}" fill-opacity="0.55" stroke="${col}" stroke-width="1.5"/>
+      <text x="${(x+r+3).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="9.5" fill="#5a6880">${s.store_id}</text>`;
+  }).join('');
+  return `<svg viewBox="0 30 520 560" width="100%" height="480" xmlns="http://www.w3.org/2000/svg">${shapes}${dots}</svg>`;
+}
+// ---------------- loaders ----------------
+const LOADERS={
+async command(){
+  const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
+  const K=[
+   ['In-stock rate', kpi.in_stock_pct+'%', kpi.total_outs+' positions out', Number(kpi.in_stock_pct)>=95?'good':'warn'],
+   ['Meat-size breaks', kpi.meat_outs, 'core sizes out now', Number(kpi.meat_outs)>0?'bad':'good'],
+   ['Inventory turns', kpi.inventory_turns, 'guardrail: watch vs in-stock', ''],
+   ['Gross margin', kpi.margin_pct+'%', 'trailing 12 months', ''],
+   ['Sales — 30 days', fmt$(kpi.sales_30d), 'est lost to stockouts: '+fmt$(kpi.est_lost_sales_30d), ''],
+   ['3-way auto-clear', kpi.auto_clear_pct+'%', kpi.open_exceptions+' open · '+fmt$(kpi.open_exception_amt), Number(kpi.auto_clear_pct)>=90?'good':'warn'],
+   ['Replen queue', kpi.replen_suggestions, 'suggestions awaiting review', ''],
+   ['Open deal savings', fmt$(kpi.open_deal_savings), kpi.open_deals+' vendor offers open', 'good'],
+   ['Store tasks', kpi.open_tasks, kpi.overdue_tasks+' overdue', Number(kpi.overdue_tasks)>0?'warn':'good'],
+  ];
+  document.getElementById('kpirow').innerHTML=K.map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  const tr=await runQ(`SELECT * FROM ${S}.sales_trend_v ORDER BY week_start`);
+  const labels=tr.map(r=>String(r.week_start).slice(0,10));
+  mkChart('ch-trend','line',{labels,datasets:[
+    {label:'Net sales',data:tr.map(r=>+r.net_sales),borderColor:'#2E5BFF',backgroundColor:'rgba(46,91,255,.08)',fill:true,tension:.3,pointRadius:0,borderWidth:2},
+    {label:'Rain-day sales',data:tr.map(r=>+r.rain_day_sales),borderColor:'#1B9E9E',backgroundColor:'rgba(27,158,158,.15)',fill:true,tension:.3,pointRadius:0,borderWidth:1.5}]},
+    {scales:{y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}});
+  mkChart('ch-margin','bar',{labels,datasets:[
+    {label:'Margin $',data:tr.map(r=>+r.margin_dollars),backgroundColor:'#1F2A44'},
+    {label:'Promo sales',data:tr.map(r=>+r.promo_sales),backgroundColor:'#C55A11'}]},
+    {scales:{x:{ticks:{maxTicksLimit:12}},y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}});
+},
+async demand(){
+  const TL=await runQ(`SELECT * FROM ${S}.demand_timeline_v`);
+  const PO=await runQ(`SELECT * FROM ${S}.proposed_po_v`);
+  const v=id=>document.getElementById(id).value;
+  const chk=id=>document.getElementById(id).checked;
+  const PAL=['#2E5BFF','#1F2A44','#7C4DBE','#C55A11','#1B9E9E','#8B6B23','#9fb0cc'];
+  // ---------- timeline ----------
+  const tlCats=uniq(TL.map(r=>r.category)).sort(), tlVens=uniq(TL.map(r=>r.vendor_name)).sort(),
+        tlRegs=uniq(TL.map(r=>r.climate_zone)).sort(), tlStores=uniq(TL.map(r=>r.store_id)).sort();
+  document.getElementById('tl-controls').innerHTML=`
+   <div><label>X axis</label><select id="tl-axis"><option value="forecast_week">Demand week</option><option value="order_by_week">Order-by week</option></select></div>
+   <div><label>Group by</label><select id="tl-group"><option value="category">Category</option><option value="brand">Brand</option><option value="vendor_name">Vendor</option><option value="store_id">Store</option><option value="climate_zone">Region</option></select></div>
+   <div><label>Values</label><select id="tl-val"><option value="units">Units</option><option value="cost">Dollars (cost)</option><option value="retail">Dollars (retail)</option></select></div>
+   <div><label>Category</label><select id="tl-cat"><option value="">All</option>${tlCats.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Vendor</label><select id="tl-ven"><option value="">All</option>${tlVens.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Region</label><select id="tl-reg"><option value="">All</option>${tlRegs.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Store</label><select id="tl-store"><option value="">All</option>${tlStores.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Weather layer</label><select id="tl-wx"><option value="on">Layered</option><option value="off">Hidden</option></select></div>`;
+  function tlPick(r, kind){
+    const val=v('tl-val');
+    if(kind==='base') return val==='units'? +r.forecast_units : val==='cost'? +r.forecast_cost : +r.forecast_retail;
+    return val==='units'? +r.weather_adj_units : val==='cost'? +r.weather_adj_cost : +r.weather_adj_retail;
+  }
+  function renderTL(){
+    const axis=v('tl-axis'), grp=v('tl-group');
+    const f=TL.filter(r=>(!v('tl-cat')||r.category===v('tl-cat'))&&(!v('tl-ven')||r.vendor_name===v('tl-ven'))
+      &&(!v('tl-reg')||r.climate_zone===v('tl-reg'))&&(!v('tl-store')||r.store_id===v('tl-store')));
+    const wkSet=uniq(f.map(r=>String(r[axis]).slice(0,10))).sort();
+    const weeks=axis==='order_by_week'? wkSet.map(w=>w<'2026-07-14'?'MISSED (past)':w) : wkSet;
+    const wkLabels=uniq(weeks);
+    const totals={}; f.forEach(r=>{const g=r[grp]; totals[g]=(totals[g]||0)+tlPick(r,'base');});
+    const top=Object.entries(totals).sort((a,b)=>b[1]-a[1]).slice(0,6).map(e=>e[0]);
+    const wkKey=r=>{const w=String(r[axis]).slice(0,10); return axis==='order_by_week'&&w<'2026-07-14'?'MISSED (past)':w;};
+    const ds=top.map((g,i)=>({label:g, backgroundColor:PAL[i%PAL.length], stack:'base',
+      data:wkLabels.map(w=>+f.filter(r=>wkKey(r)===w&&r[grp]===g).reduce((a,r)=>a+tlPick(r,'base'),0).toFixed(0))}));
+    const otherData=wkLabels.map(w=>+f.filter(r=>wkKey(r)===w&&!top.includes(r[grp])).reduce((a,r)=>a+tlPick(r,'base'),0).toFixed(0));
+    if(otherData.some(x=>x>0)) ds.push({label:'Other', backgroundColor:'#dfe7f5', stack:'base', data:otherData});
+    let wxNote='';
+    if(v('tl-wx')==='on'){
+      const react=wkLabels.map(w=>+f.filter(r=>wkKey(r)===w&&r.weather_reactable==='true').reduce((a,r)=>a+tlPick(r,'wx'),0).toFixed(0));
+      const missed=wkLabels.map(w=>+f.filter(r=>wkKey(r)===w&&r.weather_reactable!=='true').reduce((a,r)=>a+tlPick(r,'wx'),0).toFixed(0));
+      ds.push({label:'Weather — reactable', backgroundColor:'#1E9E5A', stack:'base', data:react});
+      ds.push({label:'Weather — order window missed', backgroundColor:'#C0392B', stack:'base', data:missed});
+      const rTot=react.reduce((a,b)=>a+b,0), mTot=missed.reduce((a,b)=>a+b,0);
+      wxNote=` · Weather-triggered: <b style="color:var(--green)">${fmtN(rTot)} reactable</b> / <b style="color:var(--red)">${fmtN(mTot)} missed</b> — the case for planning at observed lead times`;
+    }
+    mkChart('ch-tl','bar',{labels:wkLabels,datasets:ds},
+      {scales:{x:{stacked:true},y:{stacked:true,ticks:{callback:x=>v('tl-val')==='units'?x:'$'+fmtN(x)}}},plugins:{legend:{labels:{boxWidth:11,font:{size:10}}}}});
+    document.getElementById('tl-note').innerHTML=
+      `<span>Axis: <b>${axis==='order_by_week'?'order-by week (demand shifted back by vendor lead time; MISSED = should already be on order)':'demand week'}</b>${wxNote}</span>`;
+  }
+  ['tl-axis','tl-group','tl-val','tl-cat','tl-ven','tl-reg','tl-store','tl-wx'].forEach(id=>document.getElementById(id).onchange=renderTL);
+  renderTL();
+  // ---------- matrix ----------
+  document.getElementById('mx-controls').innerHTML=`
+   <div><label>Values</label><select id="mx-val"><option value="units">Units</option><option value="retail">Dollars (retail)</option><option value="cost">Dollars (cost)</option></select></div>
+   <div><label>Region</label><select id="mx-reg"><option value="">All regions</option>${tlRegs.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Store</label><select id="mx-store"><option value="">All stores</option>${tlStores.map(c=>`<option>${c}</option>`).join('')}</select></div>`;
+  function renderMX(){
+    const val=v('mx-val');
+    const pick=r=> val==='units'? +r.forecast_units+ +r.weather_adj_units : val==='cost'? +r.forecast_cost+ +r.weather_adj_cost : +r.forecast_retail+ +r.weather_adj_retail;
+    const f=TL.filter(r=>(!v('mx-reg')||r.climate_zone===v('mx-reg'))&&(!v('mx-store')||r.store_id===v('mx-store')));
+    const weeks=uniq(f.map(r=>String(r.forecast_week).slice(0,10))).sort();
+    const cats=uniq(f.map(r=>r.category)).sort();
+    const cell={}, colMax={};
+    weeks.forEach(w=>cats.forEach(c=>{
+      const s=f.filter(r=>String(r.forecast_week).slice(0,10)===w&&r.category===c).reduce((a,r)=>a+pick(r),0);
+      cell[w+'|'+c]=s; colMax[c]=Math.max(colMax[c]||0,s);
+    }));
+    const fmt=x=> val==='units'? fmtN(Math.round(x)) : fmt$(Math.round(x));
+    const head='<th>Week</th>'+cats.map(c=>`<th>${c}</th>`).join('')+'<th>Total</th>';
+    const body=weeks.map(w=>{
+      const tds=cats.map(c=>{const x=cell[w+'|'+c]; const heat=colMax[c]?x/colMax[c]:0;
+        return `<td class="num" style="background:rgba(46,91,255,${(heat*0.28).toFixed(3)})">${fmt(x)}</td>`;}).join('');
+      const tot=cats.reduce((a,c)=>a+cell[w+'|'+c],0);
+      return `<tr><td><b>${w}</b></td>${tds}<td class="num" style="font-weight:700">${fmt(tot)}</td></tr>`;
+    }).join('');
+    const totRow='<tr style="border-top:2px solid var(--navy)"><td><b>Total</b></td>'+cats.map(c=>{
+      const t=weeks.reduce((a,w)=>a+cell[w+'|'+c],0); return `<td class="num" style="font-weight:700">${fmt(t)}</td>`;}).join('')+
+      `<td class="num" style="font-weight:700">${fmt(weeks.reduce((a,w)=>a+cats.reduce((x,c)=>x+cell[w+'|'+c],0),0))}</td></tr>`;
+    document.getElementById('mx-table').innerHTML=`<div class="tblwrap"><table><thead><tr>${head}</tr></thead><tbody>${body}${totRow}</tbody></table></div>`;
+  }
+  ['mx-val','mx-reg','mx-store'].forEach(id=>document.getElementById(id).onchange=renderMX);
+  renderMX();
+  // ---------- PO generator ----------
+  const poVens=uniq(PO.map(r=>r.vendor_name)).sort();
+  document.getElementById('po-controls').innerHTML=`
+   <div><label>Horizon</label><select id="po-h"><option value="2">2 weeks</option><option value="4" selected>4 weeks</option><option value="6">6 weeks</option><option value="8">8 weeks</option></select></div>
+   <div><label>Vendor</label><select id="po-ven"><option value="">All vendors</option>${poVens.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Region</label><select id="po-reg"><option value="">All regions</option>${tlRegs.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Weather demand</label><select id="po-wx"><option value="on">Included</option><option value="off">Excluded</option></select></div>
+   <div style="align-self:flex-end"><button id="po-go" style="background:var(--blue);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-size:12.5px;font-weight:600;cursor:pointer">Generate proposal</button></div>`;
+  function genPO(){
+    const h=v('po-h'), wx=v('po-wx')==='on';
+    const lines=[];
+    PO.forEach(r=>{
+      if(v('po-ven')&&r.vendor_name!==v('po-ven')) return;
+      if(v('po-reg')&&r.climate_zone!==v('po-reg')) return;
+      const need=+r['fc_'+h+'wk'] + (wx? +r['wx_'+h+'wk'] : 0) + +r.safety_stock - +r.position;
+      const qty=Math.max(0, Math.ceil(need));
+      if(qty>0) lines.push({...r, qty, ext: +(qty*r.unit_cost).toFixed(2)});
+    });
+    const byVen={};
+    lines.forEach(l=>{const k=l.vendor_name; byVen[k]=byVen[k]||{vendor:k,vendor_id:l.vendor_id,stores:new Set(),lines:0,units:0,cost:0,moq:l.moq_units,receipt:l.expected_receipt,note:l.tier_break_note};
+      byVen[k].stores.add(l.store_id); byVen[k].lines++; byVen[k].units+=l.qty; byVen[k].cost+=l.ext;});
+    const vens=Object.values(byVen).sort((a,b)=>b.cost-a.cost);
+    const totCost=lines.reduce((a,l)=>a+l.ext,0), totUnits=lines.reduce((a,l)=>a+l.qty,0);
+    const csvCols=['master_po','store_id','store_name','sku_id','brand','style_name','color','size','category','vendor_name','qty','unit_cost','ext_cost','position','safety_stock','forecast_'+h+'wk','weather_adj','lead_days_p50','expected_receipt','tier_break_note'];
+    const csv=[csvCols.join(',')].concat(lines.map(l=>{
+      const mpo='MPO-PROP-'+String(l.vendor_id).slice(1);
+      return [mpo,l.store_id,`"${l.store_name}"`,`"${l.sku_id}"`,l.brand,`"${l.style_name}"`,`"${l.color}"`,`"${l.size}"`,`"${l.category}"`,`"${l.vendor_name}"`,l.qty,l.unit_cost,l.ext,l.position,l.safety_stock,l['fc_'+h+'wk'],wx?l['wx_'+h+'wk']:0,l.lead_days_p50,l.expected_receipt,`"${l.tier_break_note}"`].join(',');
+    })).join('\n');
+    const kpis=[['Proposed master POs',vens.length,'one per vendor'],['Lines',fmtN(lines.length),'store x SKU'],['Units',fmtN(totUnits),h+'-week horizon'+(wx?' + weather':'')],['Est. cost',fmt$(totCost),'at current costs']]
+      .map(k=>`<div class="kpi"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+    const venTbl=table(vens.map(x=>({vendor:x.vendor,stores:x.stores.size,lines:x.lines,units:x.units,cost:x.cost,moq:x.moq,receipt:x.receipt,note:x.note,belowMoq:x.units<+x.moq})),[
+      {h:'Proposed master PO',f:r=>`<span class="mono" style="font-size:11px">MPO-PROP-…</span> <b>${esc(r.vendor)}</b>`},
+      {h:'Ship-to stores',k:'stores',num:1},{h:'Lines',k:'lines',num:1},{h:'Units',f:r=>fmtN(r.units),num:1},
+      {h:'Est. cost',f:r=>fmt$(r.cost),num:1},
+      {h:'MOQ check',f:r=>r.belowMoq?`<span class="chip red">Below MOQ (${r.moq})</span>`:'<span class="chip green">OK</span>'},
+      {h:'Expected receipt',f:r=>String(r.receipt).slice(0,10)},
+      {h:'Opportunity',f:r=>esc(r.note||'—')}]);
+    const preview=table(lines.sort((a,b)=>b.ext-a.ext).slice(0,20),[
+      {h:'Store',k:'store_id'},{h:'Item',f:r=>`<b>${esc(r.brand)}</b> ${esc(r.style_name)}<br><span style="color:var(--sub)">${esc(r.color)} · ${esc(r.size)}</span>`},
+      {h:'Vendor',f:r=>esc(r.vendor_name.split(' ')[0])},{h:'Position',k:'position',num:1},
+      {h:'Need ('+h+'wk)',f:r=>(+r['fc_'+h+'wk']+(wx?+r['wx_'+h+'wk']:0)+ +r.safety_stock).toFixed(1),num:1},
+      {h:'Qty',f:r=>`<b>${r.qty}</b>`,num:1},{h:'Ext cost',f:r=>fmt$(r.ext),num:1}]);
+    document.getElementById('po-out').innerHTML=`
+      <div class="kpis">${kpis}</div>
+      <h3 style="margin:6px 0 8px">Master PO roll-up</h3>${venTbl}
+      <h3 style="margin:14px 0 8px">Largest lines (preview — export carries all ${fmtN(lines.length)})</h3>${preview}
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+        <button id="po-dl" style="background:var(--navy);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:12.5px;cursor:pointer">Download CSV</button>
+        <button id="po-cp" style="background:#fff;color:var(--navy);border:1.5px solid var(--navy);border-radius:8px;padding:8px 16px;font-size:12.5px;cursor:pointer">Copy CSV</button>
+        <span id="po-msg" style="align-self:center;font-size:11.5px;color:var(--sub)"></span></div>
+      <textarea id="po-csv" style="display:none;width:100%;height:140px;margin-top:10px;font-family:Consolas,monospace;font-size:10.5px;border:1px solid #C9D6EC;border-radius:8px;padding:8px"></textarea>`;
+    document.getElementById('po-dl').onclick=()=>{
+      try{ const blob=new Blob([csv],{type:'text/csv'}); const a=document.createElement('a');
+        a.href=URL.createObjectURL(blob); a.download='WW_proposed_POs_'+h+'wk_2026-07-14.csv'; a.click();
+        document.getElementById('po-msg').textContent='Downloaded.';
+      }catch(e){ const t=document.getElementById('po-csv'); t.style.display='block'; t.value=csv;
+        document.getElementById('po-msg').textContent='Download blocked in this view — CSV shown below, select-all and copy.'; }
+    };
+    document.getElementById('po-cp').onclick=async()=>{
+      try{ await navigator.clipboard.writeText(csv); document.getElementById('po-msg').textContent='Copied to clipboard.'; }
+      catch(e){ const t=document.getElementById('po-csv'); t.style.display='block'; t.value=csv; t.select();
+        document.getElementById('po-msg').textContent='Clipboard blocked — CSV shown below, select-all and copy.'; }
+    };
+  }
+  document.getElementById('po-go').onclick=genPO;
+  genPO();
+  // ---------- size overlay (existing) ----------
+  const rows=await runQ(`SELECT * FROM ${S}.size_demand_v`);
+  const ctrl=document.getElementById('sd-controls');
+  const stores=uniq(rows.map(r=>r.store_id)).sort();
+  const cats=uniq(rows.map(r=>r.category)).sort();
+  ctrl.innerHTML=`
+    <div><label>Store</label><select id="sd-store"><option value="">All stores</option>${stores.map(s=>`<option>${s}</option>`).join('')}</select></div>
+    <div><label>Category</label><select id="sd-cat">${cats.map(c=>`<option ${c==='Tops'?'selected':''}>${c}</option>`).join('')}</select></div>
+    <div><label>Brand</label><select id="sd-brand"></select></div>`;
+  function brandOpts(){
+    const cat=document.getElementById('sd-cat').value;
+    const brands=uniq(rows.filter(r=>r.category===cat).map(r=>r.brand)).sort();
+    document.getElementById('sd-brand').innerHTML='<option value="">All brands</option>'+brands.map(b=>`<option>${b}</option>`).join('');
+  }
+  function render(){
+    const st=document.getElementById('sd-store').value, cat=document.getElementById('sd-cat').value, br=document.getElementById('sd-brand').value;
+    const f=rows.filter(r=>r.category===cat&&(!st||r.store_id===st)&&(!br||r.brand===br));
+    const agg={};
+    f.forEach(r=>{
+      const k=r.size; agg[k]=agg[k]||{a:0,f:0,share:null,meat:r.meat_size==='true'};
+      agg[k].a+=+r.actual_weekly_units; agg[k].f+=+r.forecast_weekly_units;
+      if(r.size_curve_share!=null) agg[k].share=+r.size_curve_share;
+    });
+    const sizes=Object.keys(agg).sort(sizeSort);
+    const totA=sizes.reduce((s,k)=>s+agg[k].a,0);
+    const curveScaled=sizes.map(k=>agg[k].share!=null?+(agg[k].share*totA).toFixed(2):null);
+    mkChart('ch-size','bar',{labels:sizes,datasets:[
+      {label:'Actual avg wk units',data:sizes.map(k=>+agg[k].a.toFixed(1)),backgroundColor:'#1F2A44',order:2},
+      {label:'Forecast wk units',data:sizes.map(k=>+agg[k].f.toFixed(1)),backgroundColor:'#2E5BFF',order:2},
+      {label:'Size-curve expected (scaled)',data:curveScaled,type:'line',borderColor:'#C55A11',borderWidth:2,pointRadius:3,pointBackgroundColor:'#C55A11',tension:.25,order:1}]},
+      {scales:{x:{ticks:{color:c=>agg[sizes[c.index]]&&agg[sizes[c.index]].meat?'#C0392B':'#5a6880',font:{weight:'bold'}}},y:{title:{display:true,text:'units / week'}}}});
+    const over=sizes.filter(k=>agg[k].f>0&&agg[k].a/Math.max(agg[k].f,.01)>1.25);
+    const under=sizes.filter(k=>agg[k].f>0&&agg[k].a/Math.max(agg[k].f,.01)<0.75);
+    document.getElementById('sd-note').innerHTML=
+      `<span><span class="dot" style="background:#1F2A44"></span>Actual</span><span><span class="dot" style="background:#2E5BFF"></span>Forecast</span><span><span class="dot" style="background:#C55A11"></span>Curve expectation</span>`+
+      (over.length?` · <b>Selling over forecast:</b> ${over.join(', ')}`:'')+
+      (under.length?` · <b>Under forecast:</b> ${under.join(', ')}`:'')+
+      ` · scope: ${st||'all stores'} / ${cat}${br?' / '+br:''}`;
+  }
+  document.getElementById('sd-cat').onchange=()=>{brandOpts();render();};
+  document.getElementById('sd-store').onchange=render;
+  document.getElementById('sd-brand').onchange=render;
+  brandOpts(); render();
+},
+async replen(){
+  const q=await runQ(`SELECT action, count(*) n FROM ${S}.replen_queue_v GROUP BY 1 ORDER BY n DESC`);
+  document.getElementById('rep-kpis').innerHTML=q.map(r=>`<div class="kpi"><div class="lbl">${esc(r.action)}</div><div class="val">${fmtN(r.n)}</div><div class="sub">in current queue</div></div>`).join('');
+  // ----- map -----
+  const V=await runQ(`SELECT * FROM ${S}.store_variance_v`);
+  const ctrl=document.getElementById('map-controls');
+  const cats=uniq(V.map(r=>r.category)).sort(), brands=uniq(V.map(r=>r.brand)).sort(), sizes=uniq(V.map(r=>r.size)).sort(sizeSort);
+  ctrl.innerHTML=`
+   <div><label>Metric</label><select id="mp-metric">
+     <option value="var">Sales vs plan variance %</option><option value="outs">Stockout positions</option>
+     <option value="meat">Meat-size breaks</option><option value="lost">Lost sales $</option></select></div>
+   <div><label>Category</label><select id="mp-cat"><option value="">All</option>${cats.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Brand</label><select id="mp-brand"><option value="">All</option>${brands.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Size</label><select id="mp-size"><option value="">All</option>${sizes.map(c=>`<option>${c}</option>`).join('')}</select></div>
+   <div><label>Break down by</label><select id="mp-dim"><option value="category">Category</option><option value="brand">Brand</option><option value="size">Size</option></select></div>`;
+  let selStore=null;
+  function filt(){ const c=v('mp-cat'),b=v('mp-brand'),s=v('mp-size');
+    return V.filter(r=>(!c||r.category===c)&&(!b||r.brand===b)&&(!s||r.size===s)); }
+  function v(id){return document.getElementById(id).value;}
+  function aggStores(rows){
+    const g={};
+    rows.forEach(r=>{ const k=r.store_id;
+      g[k]=g[k]||{store_id:k,store_name:r.store_name,latitude:r.latitude,longitude:r.longitude,a:0,e:0,outs:0,meat:0,lost:0};
+      g[k].a+=+r.actual_units; g[k].e+=+r.expected_units; g[k].outs+=+r.outs; g[k].meat+=+r.meat_outs; g[k].lost+=+r.lost_sales; });
+    return Object.values(g);
+  }
+  function metricVal(s){ const m=v('mp-metric');
+    if(m==='var') return s.e>0? +(100*(s.a-s.e)/s.e).toFixed(1) : 0;
+    if(m==='outs') return s.outs; if(m==='meat') return s.meat; return Math.round(s.lost); }
+  function metricFmt(x){ const m=v('mp-metric'); return m==='var'?(x>0?'+':'')+x+'%' : m==='lost'?fmt$(x) : fmtN(x); }
+  function renderMap(){
+    const stores=aggStores(filt());
+    document.getElementById('svgmap').innerHTML=mapSVG(stores, v('mp-metric'), metricVal, selStore);
+    const m=v('mp-metric');
+    document.getElementById('map-legend').innerHTML= m==='var'
+      ? `<span><span class="dot" style="background:#1E9E5A"></span>Selling over plan</span><span><span class="dot" style="background:#C0392B"></span>Selling under plan</span><span>Scope: ${v('mp-cat')||'all categories'}${v('mp-brand')?' / '+v('mp-brand'):''}${v('mp-size')?' / size '+v('mp-size'):''} · last 8 weeks</span>`
+      : `<span><span class="dot" style="background:#C0392B"></span>Higher = worse</span><span>Scope: ${v('mp-cat')||'all categories'}${v('mp-brand')?' / '+v('mp-brand'):''}${v('mp-size')?' / size '+v('mp-size'):''}</span>`;
+    const tip=document.getElementById('maptip');
+    document.querySelectorAll('#svgmap circle.store').forEach(c=>{
+      const s=stores[+c.dataset.i];
+      c.addEventListener('mousemove',ev=>{
+        tip.style.display='block';
+        const host=document.getElementById('svgmap').getBoundingClientRect();
+        tip.style.left=(ev.clientX-host.left+14)+'px'; tip.style.top=(ev.clientY-host.top-10)+'px';
+        tip.innerHTML=`<b>${s.store_id} — ${esc(s.store_name)}</b><br>${metricFmt(metricVal(s))} · ${fmtN(s.a)} units actual vs ${fmtN(Math.round(s.e))} plan<br>${s.outs} outs · ${s.meat} meat breaks · ${fmt$(s.lost)} lost`;
+      });
+      c.addEventListener('mouseleave',()=>tip.style.display='none');
+      c.addEventListener('click',()=>{ selStore=s.store_id; renderMap(); renderSide(); });
+    });
+  }
+  function renderSide(){
+    const side=document.getElementById('map-side');
+    if(!selStore){ side.innerHTML='<div class="loading">{ SELECT A STORE }</div>'; return; }
+    const dim=v('mp-dim');
+    const rows=filt().filter(r=>r.store_id===selStore);
+    const g={};
+    rows.forEach(r=>{ const k=r[dim]; g[k]=g[k]||{a:0,e:0,outs:0,meat:0,lost:0};
+      g[k].a+=+r.actual_units; g[k].e+=+r.expected_units; g[k].outs+=+r.outs; g[k].meat+=+r.meat_outs; g[k].lost+=+r.lost_sales; });
+    const m=v('mp-metric');
+    let items=Object.entries(g).map(([k,x])=>({k, val: m==='var'?(x.e>0?100*(x.a-x.e)/x.e:0): m==='outs'?x.outs: m==='meat'?x.meat: x.lost, x}));
+    items=items.filter(i=>i.x.e>0.5||i.val!==0);
+    items.sort((p,q)=>m==='var'? p.val-q.val : q.val-p.val);
+    if(dim==='size') items.sort((p,q)=>sizeSort(p.k,q.k));
+    const top=items.slice(0,14);
+    const name=(aggStores(rows)[0]||{}).store_name||selStore;
+    side.innerHTML=`<h3 style="margin-bottom:8px">${selStore} — ${esc(name)} · by ${dim}</h3><div class="chartbox tall"><canvas id="ch-mapside"></canvas></div>`;
+    mkChart('ch-mapside','bar',{labels:top.map(i=>i.k),datasets:[{label:m==='var'?'Variance % vs plan': m==='lost'?'Lost sales $':'Count',
+      data:top.map(i=>+i.val.toFixed(1)),
+      backgroundColor:top.map(i=> m==='var' ? (i.val<0?'#C0392B':'#1E9E5A') : '#2E5BFF')}]},
+      {indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{callback:x=> m==='var'?x+'%': m==='lost'?'$'+fmtN(x):x}}}});
+  }
+  ['mp-metric','mp-cat','mp-brand','mp-size'].forEach(id=>document.getElementById(id).onchange=()=>{renderMap();renderSide();});
+  document.getElementById('mp-dim').onchange=renderSide;
+  renderMap();
+  // ----- lead time -----
+  const LT=await runQ(`SELECT * FROM ${S}.lead_time_variance_v`);
+  const vendors=uniq(LT.map(r=>r.vendor_name)).sort();
+  const pal=['#2E5BFF','#C0392B','#1E9E5A','#C55A11','#7C4DBE','#1B9E9E','#8B6B23'];
+  const vcol=Object.fromEntries(vendors.map((v,i)=>[v,pal[i%pal.length]]));
+  const dsets=vendors.map(v=>({label:v.split(' ')[0],
+    data:LT.filter(r=>r.vendor_name===v).map(r=>({x:Date.parse(r.requested_ship), y:+r.variance_days})),
+    backgroundColor:vcol[v], pointRadius:3, showLine:false}));
+  const xs=LT.map(r=>Date.parse(r.requested_ship));
+  dsets.push({label:'quoted (0)',type:'line',data:[{x:Math.min(...xs),y:0},{x:Math.max(...xs),y:0}],borderColor:'#1F2A44',borderDash:[6,4],borderWidth:1.5,pointRadius:0});
+  mkChart('ch-lt-scatter','scatter',{datasets:dsets},
+    {scales:{x:{type:'linear',ticks:{maxTicksLimit:8,callback:v=>new Date(v).toISOString().slice(0,10)}},
+             y:{title:{display:true,text:'days vs quoted lead'}}},
+     plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}}});
+  function pct(arr,p){ const a=[...arr].sort((x,y)=>x-y); return a.length?a[Math.min(a.length-1,Math.floor(p*a.length))]:0; }
+  const vs=vendors.map(v=>{ const rows=LT.filter(r=>r.vendor_name===v);
+    return {v, quoted:+rows[0].quoted_lead_days, p50:pct(rows.map(r=>+r.actual_lead_days),.5), p90:pct(rows.map(r=>+r.actual_lead_days),.9), n:rows.length}; });
+  vs.sort((a,b)=>(b.p50-b.quoted)-(a.p50-a.quoted));
+  mkChart('ch-lt-vendor','bar',{labels:vs.map(x=>x.v.split(' ')[0]+` (${x.n})`),datasets:[
+    {label:'Quoted lead (planning basis today)',data:vs.map(x=>x.quoted),backgroundColor:'#9fb0cc'},
+    {label:'Actual P50',data:vs.map(x=>x.p50),backgroundColor:'#2E5BFF'},
+    {label:'Actual P90',data:vs.map(x=>x.p90),backgroundColor:'#C0392B'}]},
+    {scales:{y:{title:{display:true,text:'days order → receipt'}}}});
+  // ----- existing: size runs + queue -----
+  const runs=await runQ(`SELECT store_id, sum(CASE WHEN run_status='MeatBreak' THEN 1 ELSE 0 END) meat, sum(CASE WHEN run_status='FringeBreak' THEN 1 ELSE 0 END) fringe, sum(CASE WHEN run_status='Intact' THEN 1 ELSE 0 END) intact FROM ${S}.size_run_health_v GROUP BY 1 ORDER BY 1`);
+  mkChart('ch-runs','bar',{labels:runs.map(r=>r.store_id),datasets:[
+    {label:'Meat break',data:runs.map(r=>+r.meat),backgroundColor:'#C0392B'},
+    {label:'Fringe break',data:runs.map(r=>+r.fringe),backgroundColor:'#C55A11'},
+    {label:'Intact',data:runs.map(r=>+r.intact),backgroundColor:'#1E9E5A'}]},
+    {scales:{x:{stacked:true},y:{stacked:true}}});
+  const rows=await runQ(`SELECT * FROM ${S}.replen_queue_v ORDER BY days_to_stockout LIMIT 25`);
+  document.getElementById('rep-tbl').innerHTML=table(rows,[
+    {h:'Store',k:'store_id'},{h:'Item',f:r=>`<b>${esc(r.brand)}</b> ${esc(r.style_name)}<br><span style="color:var(--sub)">${esc(r.color)} · ${esc(r.size)}</span>`},
+    {h:'Action',f:r=>statusChip(r.action)},{h:'Qty',k:'suggested_qty',num:1},
+    {h:'Stockout',f:r=>`${String(r.proj_stockout_date).slice(0,10)}<br><span style="color:var(--sub)">${r.days_to_stockout}d</span>`},
+    {h:'Note',f:r=>esc(r.tier_break_note||r.reason)},{h:'Status',f:r=>statusChip(r.status)}]);
+},
+async ats(){
+  const rows=await runQ(`SELECT * FROM ${S}.ats_coverage_v ORDER BY items_reported DESC`);
+  document.getElementById('ats-tbl').innerHTML='<h3>Coverage by vendor — latest snapshot</h3><div class="hint">Crossref match rate is the health metric: unmatched vendor SKUs can\'t inform ordering.</div>'+table(rows,[
+    {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b>`},{h:'Tier',k:'sophistication'},
+    {h:'Method',f:r=>`<span class="chip ${r.capture_method==='EDI 846'?'green':r.capture_method==='Portal download'?'blue':'orange'}">${esc(r.capture_method)}</span>`},
+    {h:'Items',k:'items_reported',num:1},{h:'Matched',k:'items_matched',num:1},
+    {h:'Match rate',f:r=>r.match_rate_pct+'%',num:1},{h:'Zero ATS',k:'zero_ats_items',num:1},
+    {h:'Next avail',f:r=>r.earliest_next_avail?String(r.earliest_next_avail).slice(0,10):'—'}]);
+},
+async deals(){
+  const rows=await runQ(`SELECT * FROM ${S}.deal_pipeline_v ORDER BY CASE status WHEN 'Open' THEN 0 ELSE 1 END, days_to_expiry`);
+  const open=rows.filter(r=>r.status==='Open');
+  document.getElementById('deal-kpis').innerHTML=[
+    ['Open offers',open.length,'awaiting decision'],
+    ['Savings at commit',fmt$(open.reduce((a,r)=>a+ +r.savings_at_commit,0)),'if all open offers accepted'],
+    ['Expiring soon',open.filter(r=>+r.days_to_expiry<=7).length,'within 7 days'],
+  ].map(k=>`<div class="kpi"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  document.getElementById('deal-tbl').innerHTML='<h3>Deal pipeline</h3><div class="hint">AI recommendation weighs margin uplift against weeks-of-supply and broken-run risk.</div>'+table(rows,[
+    {h:'ID',f:r=>`<span class="mono" style="font-size:11px">${esc(r.opp_id)}</span>`},
+    {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b><br><span style="color:var(--sub)">${esc(r.opp_type)}</span>`},
+    {h:'Offer',f:r=>esc(r.description)},
+    {h:'Commit',k:'commit_qty',num:1},
+    {h:'Savings',f:r=>fmt$(r.savings_at_commit),num:1},
+    {h:'Uplift',f:r=>r.margin_uplift_pct+'%',num:1},
+    {h:'WOS',k:'est_weeks_of_supply',num:1},
+    {h:'Expires',f:r=>r.days_to_expiry>0?('in '+r.days_to_expiry+'d'):'—'},
+    {h:'AI call',f:r=>`<span style="font-size:11.5px">${esc(r.ai_recommendation)}</span>`},
+    {h:'Status',f:r=>statusChip(r.status)}]);
+},
+async match(){
+  const sum=await runQ(`SELECT variance_type, sum(variance_amount) amt, count(*) n FROM ${S}.exception_queue_v GROUP BY 1 ORDER BY amt DESC`);
+  const [k]=await runQ(`SELECT auto_clear_pct, open_exceptions, open_exception_amt FROM ${S}.kpi_summary_v`);
+  const life=await runQ(`SELECT status, past_requested_ship, count(*) n, round(sum(open_value),0) ov FROM ${S}.po_lifecycle_v GROUP BY 1,2`);
+  const openPos=life.filter(r=>r.status==='Open').reduce((a,r)=>a+ +r.n,0);
+  const openVal=life.filter(r=>r.status==='Open').reduce((a,r)=>a+ +r.ov,0);
+  const lateOpen=life.filter(r=>r.status==='Open'&&r.past_requested_ship==='true').reduce((a,r)=>a+ +r.n,0);
+  const stmts=await runQ(`SELECT * FROM ${S}.statement_recon_v ORDER BY open_exception_amt DESC, statement_total DESC`);
+  const holds=stmts.filter(r=>r.recon_status!=='Clear to pay');
+  const trend=await runQ(`SELECT * FROM ${S}.match_trend_v ORDER BY match_month`);
+  const recovered=trend.reduce((a,r)=>a+ +r.variance_recovered,0);
+  document.getElementById('m-kpis').innerHTML=[
+    ['Auto-clear rate',k.auto_clear_pct+'%','of matched lines need no human',''],
+    ['Open exceptions',k.open_exceptions,fmt$(k.open_exception_amt)+' awaiting recovery','warn'],
+    ['Variance recovered',fmt$(recovered),'trailing 12 months','good'],
+    ['Open POs',openPos,fmt$(openVal)+' on order · '+lateOpen+' past requested ship',lateOpen?'warn':''],
+    ['Statements on hold',holds.length,'of '+stmts.length+' — exceptions block payment',holds.length?'warn':'good'],
+  ].map(x=>`<div class="kpi ${x[3]}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+  // ---- document explorer ----
+  const tree=await runQ(`SELECT * FROM ${S}.po_document_tree_v`);
+  const masters={};
+  tree.forEach(r=>{ const m=masters[r.master_po_id]=masters[r.master_po_id]||{id:r.master_po_id,vendor:r.vendor_name,date:r.master_order_date,type:r.po_type,rows:[],exc:0,excAmt:0,val:0};
+    m.rows.push(r); m.exc+=+r.open_exceptions; m.excAmt+=+r.open_exception_amt; m.val+=+r.po_value; });
+  const mlist=Object.values(masters).sort((a,b)=> b.exc-a.exc || String(b.date).localeCompare(String(a.date))).slice(0,30);
+  document.getElementById('doc-controls').innerHTML=`<div><label>Master PO</label><select id="doc-sel">${mlist.map((m,i)=>`<option value="${m.id}" ${i===0?'selected':''}>${m.id} — ${m.vendor.split(' ')[0]} · ${String(m.date).slice(0,10)} · ${m.type}${m.exc?' · '+m.exc+' exceptions':''}</option>`).join('')}</select></div>`;
+  function renderTree(){
+    const m=masters[document.getElementById('doc-sel').value];
+    const recvd=m.rows.reduce((a,r)=>a+ +r.qty_received,0), ord=m.rows.reduce((a,r)=>a+ +r.qty_ordered,0);
+    document.getElementById('doc-summary').innerHTML=`<div class="legend" style="margin-bottom:10px">
+      <span class="mono" style="color:var(--navy);font-weight:700">${m.id}</span>
+      <span><b>${esc(m.vendor)}</b> · ${m.type} · ordered ${String(m.date).slice(0,10)}</span>
+      <span>${m.rows.length} store POs · ${fmtN(ord)} units ordered · ${fmtN(recvd)} received · ${fmt$(m.val)} value</span>
+      <span>${m.exc?`<span class="chip red">${m.exc} open exceptions · ${fmt$(m.excAmt)}</span>`:'<span class="chip green">Fully reconciled</span>'}</span></div>`;
+    const rows=[...m.rows].sort((a,b)=>String(a.store_id).localeCompare(String(b.store_id)));
+    document.getElementById('doc-tree').innerHTML=table(rows,[
+      {h:'Mini-PO / Store',f:r=>`<span class="mono" style="font-size:11px">${esc(r.po_id)}</span><br><b>${esc(r.store_id)}</b> <span style="color:var(--sub)">${esc(r.store_name||'')}</span>`},
+      {h:'855 ack',f:r=>`<span class="chip ${r.edi_855_ack==='Accepted'?'green':r.edi_855_ack==='AcceptedWithChanges'?'orange':'gray'}">${esc(r.edi_855_ack)}</span>`},
+      {h:'PO',f:r=>statusChip(r.po_status)},
+      {h:'Ord / Recv / Cxl',f:r=>`${r.qty_ordered} / ${r.qty_received} / ${r.qty_cancelled}`,num:1},
+      {h:'Value',f:r=>fmt$(r.po_value),num:1},
+      {h:'Receiver',f:r=>r.receiver_id?`<span class="mono" style="font-size:10.5px">${esc(r.receiver_id)}</span><br>${statusChip(r.receiver_status)} <span style="color:var(--sub)">${String(r.received_date).slice(0,10)}</span>`:'<span style="color:var(--sub)">—</span>'},
+      {h:'Invoice',f:r=>r.invoice_id?`<span class="mono" style="font-size:10.5px">${esc(r.invoice_id)}</span><br>${fmt$(r.invoice_total)} ${r.invoice_status?statusChip(r.invoice_status==='Exception'?'PendingReview':r.invoice_status==='Matched'?'AutoCleared':'Resolved'):''}`:'<span style="color:var(--sub)">—</span>'},
+      {h:'Statement',f:r=>r.master_statement_id?`<span class="mono" style="font-size:10.5px">${esc(r.master_statement_id)}</span>`:'—'},
+      {h:'Match',f:r=>+r.open_exceptions?`<span class="chip red">${r.open_exceptions} open · ${fmt$(r.open_exception_amt)}</span>`:(+r.total_exceptions?'<span class="chip green">Resolved</span>':(r.invoice_id?'<span class="chip green">Clean</span>':'<span style="color:var(--sub)">pending docs</span>'))}]);
+  }
+  document.getElementById('doc-sel').onchange=renderTree;
+  renderTree();
+  // ---- trend ----
+  mkChart('ch-mtrend','bar',{labels:trend.map(r=>String(r.match_month).slice(0,7)),datasets:[
+    {label:'Identified $',data:trend.map(r=>+r.variance_identified),backgroundColor:'#9fb0cc'},
+    {label:'Recovered $',data:trend.map(r=>+r.variance_recovered),backgroundColor:'#1E9E5A'},
+    {label:'Still open $',data:trend.map(r=>+r.variance_open),backgroundColor:'#C0392B'},
+    {label:'Auto-clear %',type:'line',yAxisID:'y1',data:trend.map(r=>+r.auto_clear_pct),borderColor:'#2E5BFF',borderWidth:2,pointRadius:2,tension:.3}]},
+    {scales:{y:{ticks:{callback:x=>'$'+fmtN(x)}},y1:{position:'right',min:80,max:100,grid:{drawOnChartArea:false},ticks:{callback:x=>x+'%'}}}});
+  // ---- aging ----
+  const exAll=await runQ(`SELECT age_days, variance_amount FROM ${S}.exception_queue_v`);
+  const buckets={'0-15d':0,'16-30d':0,'31-60d':0,'60d+':0};
+  exAll.forEach(r=>{const a=+r.age_days; const b=a<=15?'0-15d':a<=30?'16-30d':a<=60?'31-60d':'60d+'; buckets[b]++;});
+  mkChart('ch-mage','bar',{labels:Object.keys(buckets),datasets:[{label:'Open exceptions',data:Object.values(buckets),
+    backgroundColor:['#1E9E5A','#2E5BFF','#C55A11','#C0392B']}]},{plugins:{legend:{display:false}}});
+  mkChart('ch-var','doughnut',{labels:sum.map(r=>r.variance_type),datasets:[{data:sum.map(r=>+r.amt),
+    backgroundColor:['#C0392B','#C55A11','#7C4DBE','#2E5BFF','#1B9E9E']}]},{plugins:{legend:{position:'right',labels:{font:{size:10}}}}});
+  // ---- statements ----
+  document.getElementById('m-stmt').innerHTML=table(stmts.slice(0,20),[
+    {h:'Statement',f:r=>`<span class="mono" style="font-size:11px">${esc(r.master_statement_id)}</span><br><b>${esc(r.vendor_name.split(' ')[0])}</b>`},
+    {h:'Inv',k:'invoice_count',num:1},
+    {h:'Total',f:r=>fmt$(r.statement_total),num:1},
+    {h:'Open exc',f:r=>+r.open_exceptions?`${r.open_exceptions} · ${fmt$(r.open_exception_amt)}`:'—',num:1},
+    {h:'Due',f:r=>`${String(r.last_due).slice(0,10)}`},
+    {h:'Status',f:r=>`<span class="chip ${r.recon_status==='Clear to pay'?'green':r.recon_status==='Pay less debit memos'?'blue':'red'}">${esc(r.recon_status)}</span>`}]);
+  const rows=await runQ(`SELECT * FROM ${S}.exception_queue_v ORDER BY variance_amount DESC LIMIT 25`);
+  document.getElementById('m-tbl').innerHTML=table(rows,[
+    {h:'PO / Invoice',f:r=>`<span class="mono" style="font-size:11px">${esc(r.po_id)}<br>${esc(r.invoice_id)}</span>`},
+    {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b><br><span style="color:var(--sub)">${esc(r.store_id)}</span>`},
+    {h:'Item',f:r=>`${esc(r.brand??'')} ${esc(r.style_name??'')} <span style="color:var(--sub)">${esc(r.size??'')}</span>`},
+    {h:'Cause',f:r=>statusChip(r.variance_type)},
+    {h:'$',f:r=>fmt$(r.variance_amount),num:1},
+    {h:'Age',f:r=>r.age_days+'d',num:1},
+    {h:'AI resolution',f:r=>`<span style="font-size:11.5px">${esc(r.ai_suggested_resolution)}</span>`},
+    {h:'Status',f:r=>statusChip(r.status)}]);
+},
+async markdown(){
+  const season=await runQ(`SELECT * FROM ${S}.markdown_season_v ORDER BY week_start`);
+  const ladder=await runQ(`SELECT * FROM ${S}.markdown_ladder_v ORDER BY style_id, step_no`);
+  const pols=await runQ(`SELECT * FROM ${S}.markdown_policy ORDER BY policy_id`);
+  const exps=await runQ(`SELECT * FROM ${S}.experiments WHERE lower(hypothesis) LIKE '%markdown%' OR lower(hypothesis) LIKE '%rainwear%' ORDER BY exp_id`);
+  const evts=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v WHERE event_type='Markdown' ORDER BY effective_date`);
+  const last=season[season.length-1];
+  const mdSales=season.filter(r=>String(r.week_start)>='2026-06-15').reduce((a,r)=>a+ +r.net_sales,0);
+  const floorBreaches=ladder.filter(r=>r.below_floor==='true').length;
+  const evtOverdue=evts.filter(r=>r.workflow_state==='OVERDUE - not staged').length;
+  const taskOverdue=evts.reduce((a,r)=>a+ +r.tasks_overdue,0);
+  document.getElementById('md-kpis').innerHTML=[
+    ['Season sell-through', last.cum_sell_through_pct+'%', fmtN(last.cum_units)+' of est '+fmtN(last.est_season_supply)+' units', +last.cum_sell_through_pct>=60?'good':'warn'],
+    ['Active policies', pols.filter(p=>p.status==='Active').length, pols.filter(p=>p.status==='Testing').length+' in test (MD-004 delayed ladder)',''],
+    ['Sales since step 1', fmt$(mdSales), 'rainwear, 6/15 markdown onward',''],
+    ['Floor breaches in ladder', floorBreaches, 'deep steps priced below policy floor', floorBreaches?'warn':'good'],
+    ['Events needing action', evtOverdue, 'markdown steps scheduled, not staged', evtOverdue?'bad':'good'],
+    ['Label tasks overdue', taskOverdue, 'across markdown events', taskOverdue?'bad':'good'],
+  ].map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  // season chart
+  const labels=season.map(r=>String(r.week_start).slice(0,10));
+  const stepPts=season.map(r=>r.markdown_step? +r.cum_sell_through_pct : null);
+  mkChart('ch-md-season','bar',{labels,datasets:[
+    {label:'Weekly units',data:season.map(r=>+r.units),backgroundColor:'#9fb0cc',order:3},
+    {label:'Cumulative sell-through %',type:'line',yAxisID:'y1',data:season.map(r=>+r.cum_sell_through_pct),borderColor:'#2E5BFF',borderWidth:2,pointRadius:0,tension:.25,order:1},
+    {label:'Trigger: 60% by season wk 10',type:'line',yAxisID:'y1',data:season.map(()=>60),borderColor:'#1F2A44',borderDash:[6,4],borderWidth:1.2,pointRadius:0,order:2},
+    {label:'Ladder steps',type:'line',yAxisID:'y1',data:stepPts,showLine:false,pointRadius:7,pointStyle:'rectRot',pointBackgroundColor:'#C55A11',borderColor:'#C55A11',order:0}]},
+    {scales:{x:{ticks:{maxTicksLimit:12}},y:{title:{display:true,text:'units/wk'}},
+      y1:{position:'right',min:0,max:100,grid:{drawOnChartArea:false},ticks:{callback:x=>x+'%'}}}});
+  const steps=season.filter(r=>r.markdown_step);
+  document.getElementById('md-season-note').innerHTML=steps.map(r=>`<span><span class="dot" style="background:#C55A11"></span><b>${String(r.week_start).slice(0,10)}</b> — ${esc(r.markdown_step)} at ${r.cum_sell_through_pct}% sell-through, realized price ${fmt$(r.realized_price)}</span>`).join(' · ');
+  // ladder
+  const styles=uniq(ladder.map(r=>r.style_id));
+  document.getElementById('md-ladder-controls').innerHTML=`<div><label>Style</label><select id="md-style">${styles.map(s=>{const r=ladder.find(x=>x.style_id===s);return `<option value="${s}">${r.brand} ${r.style_name} (${r.policy_id})</option>`;}).join('')}</select></div>`;
+  function renderLadder(){
+    const rows=ladder.filter(r=>r.style_id===document.getElementById('md-style').value);
+    mkChart('ch-md-ladder','bar',{labels:rows.map(r=>r.step_label+' — '+fmt$(r.step_price)),datasets:[
+      {label:'Margin % at step',data:rows.map(r=>+r.step_margin_pct),
+       backgroundColor:rows.map(r=>r.below_floor==='true'?'#C0392B':'#1E9E5A')},
+      {label:'Policy floor '+rows[0].floor_margin_pct+'%',type:'line',data:rows.map(r=>+r.floor_margin_pct),borderColor:'#1F2A44',borderDash:[6,4],borderWidth:1.5,pointRadius:0}]},
+      {plugins:{legend:{labels:{boxWidth:10}}},scales:{y:{title:{display:true,text:'margin %'}}}});
+  }
+  document.getElementById('md-style').onchange=renderLadder; renderLadder();
+  // policies
+  document.getElementById('md-policies').innerHTML=table(pols,[
+    {h:'Policy',f:r=>`<span class="mono" style="font-size:11px">${esc(r.policy_id)}</span>`},
+    {h:'Scope',k:'scope'},{h:'Trigger',k:'trigger'},
+    {h:'Ladder',f:r=>`${esc(r.step_1)} → ${esc(r.step_2)} → ${esc(r.step_3)}`},
+    {h:'Floor',f:r=>Math.round(r.floor_margin_pct*100)+'%',num:1},
+    {h:'Status',f:r=>`<span class="chip ${r.status==='Active'?'green':'purple'}">${esc(r.status)}</span>`}]);
+  // experiments
+  document.getElementById('md-exps').innerHTML=exps.map(e=>`
+    <div style="border:1px solid #E3EAF6;border-radius:10px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px"><span class="mono" style="font-size:11px;color:var(--blue)">${esc(e.exp_id)}</span>
+      <span class="chip ${e.decision==='Rollout'?'green':e.decision==='Abandon'?'red':'blue'}">${esc(e.decision)}</span>
+      <span style="color:var(--sub);font-size:11px">${esc(e.scope)}</span></div>
+      <div style="font-size:13px;margin-bottom:4px"><b>${esc(e.hypothesis)}</b></div>
+      <div style="font-size:12px;color:var(--sub)">Result: <b style="color:var(--txt)">${esc(e.result)}</b> · ${esc(e.ai_summary)}</div>
+    </div>`).join('');
+  // events
+  document.getElementById('md-events').innerHTML=table(evts,[
+    {h:'Event',f:r=>`<span class="mono" style="font-size:11px">${esc(r.event_id)}</span>`},
+    {h:'Scope',k:'scope'},{h:'SKUs',k:'skus_affected',num:1},
+    {h:'Effective',f:r=>String(r.effective_date).slice(0,10)},
+    {h:'Workflow',f:r=>`<span class="chip ${({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[r.workflow_state]||'gray'}">${esc(r.workflow_state)}</span>`},
+    {h:'Labels',f:r=>r.label_file_generated==='true'?'<span class="chip green">Generated</span>':'<span class="chip gray">Pending</span>'},
+    {h:'Store tasks',f:r=>+r.tasks_total?`${r.tasks_done}/${r.tasks_total} done`+(+r.tasks_overdue?` · <span style="color:var(--red);font-weight:700">${r.tasks_overdue} overdue</span>`:''):'—'}]);
+},
+async pricing(){
+  const pipe=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v ORDER BY effective_date`);
+  const upcoming=pipe.filter(r=>+r.days_to_effective>0);
+  const overdue=pipe.filter(r=>r.workflow_state==='OVERDUE - not staged');
+  const tOver=pipe.reduce((a,r)=>a+ +r.tasks_overdue,0);
+  const impact=await runQ(`SELECT * FROM ${S}.price_impact_v ORDER BY annual_margin_delta DESC`);
+  const annDelta=impact.reduce((a,r)=>a+ +r.annual_margin_delta,0);
+  const pb=await runQ(`SELECT * FROM ${S}.prebuy_analysis_v ORDER BY prebuy_savings DESC`);
+  const pbSav=pb.reduce((a,r)=>a+ +r.prebuy_savings,0), pbCash=pb.reduce((a,r)=>a+ +r.prebuy_cash_outlay,0);
+  document.getElementById('pr-kpis').innerHTML=[
+    ['Events in pipeline',pipe.length, upcoming.length+' upcoming · '+overdue.length+' overdue', overdue.length?'warn':''],
+    ['Next effective', upcoming.length?String(upcoming[0].effective_date).slice(0,10):'—', upcoming.length?('in '+upcoming[0].days_to_effective+'d — '+upcoming[0].vendor_name):'', ''],
+    ['SKUs touched', pipe.reduce((a,r)=>a+ +r.skus_affected,0), 'across all pipeline events', ''],
+    ['Margin delta (8/1 staged)', fmt$(annDelta)+'/yr', 'retail +10% vs cost +5.5%', annDelta>0?'good':'bad'],
+    ['Pre-buy on the table', fmt$(pbSav), 'on '+fmt$(pbCash)+' outlay · 6-wk guardrail', 'good'],
+    ['Store tasks overdue', tOver, 'from price events', tOver?'bad':'good'],
+  ].map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  const wfChip=s=>({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[s]||'gray';
+  document.getElementById('pr-pipe').innerHTML='<h3>Price &amp; promo event pipeline</h3><div class="hint">Announced → staged → ERP updated → stores notified → labels printed. Task rollup shows store execution.</div>'+table(pipe,[
+    {h:'Event',f:r=>`<span class="mono" style="font-size:11px">${esc(r.event_id)}</span>`},
+    {h:'Type',f:r=>`<span class="chip ${({VendorIncrease:'orange',Markdown:'purple',PromoStart:'blue',PromoEnd:'gray'})[r.event_type]||'gray'}">${esc(r.event_type)}</span>`},
+    {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b>`},
+    {h:'Scope',k:'scope'},
+    {h:'SKUs',k:'skus_affected',num:1},
+    {h:'Effective',f:r=>`${String(r.effective_date).slice(0,10)}<br><span style="color:var(--sub)">${+r.days_to_effective>0?('in '+r.days_to_effective+'d'):(-r.days_to_effective)+'d ago'}</span>`},
+    {h:'Workflow',f:r=>`<span class="chip ${wfChip(r.workflow_state)}">${esc(r.workflow_state)}</span>`},
+    {h:'Store tasks',f:r=>+r.tasks_total? `${r.tasks_done}/${r.tasks_total} done`+(+r.tasks_overdue?` · <span style="color:var(--red);font-weight:700">${r.tasks_overdue} overdue</span>`:'') : '—'},
+    {h:'Comms',f:r=>`<span class="chip ${r.comm_status==='Sent'?'green':r.comm_status==='Not drafted'?'gray':'orange'}">${esc(r.comm_status)}</span>`}]);
+  mkChart('ch-pr-impact','bar',{labels:impact.map(r=>r.style_name.length>22?r.style_name.slice(0,22)+'…':r.style_name),datasets:[
+    {label:'Margin % today',data:impact.map(r=>+r.old_margin_pct),backgroundColor:'#9fb0cc'},
+    {label:'Margin % after 8/1',data:impact.map(r=>+r.new_margin_pct),backgroundColor:'#1E9E5A'}]},
+    {scales:{y:{title:{display:true,text:'margin %'}}}});
+  document.getElementById('pr-impact-note').innerHTML=impact.map(r=>`<span><b>${esc(r.brand)} ${esc(r.style_name.split(' ')[0])}</b>: ${fmt$(r.old_cost)}→${fmt$(r.new_cost)} cost, ${fmt$(r.old_retail)}→${fmt$(r.new_retail)} retail, ${r.annual_margin_delta>=0?'+':''}${fmt$(r.annual_margin_delta)}/yr</span>`).join(' · ');
+  const byV={};
+  pb.forEach(r=>{byV[r.vendor_name]=byV[r.vendor_name]||{sav:0,cash:0,days:r.days_to_effective,pct:r.cost_increase_pct};byV[r.vendor_name].sav+=+r.prebuy_savings;byV[r.vendor_name].cash+=+r.prebuy_cash_outlay;});
+  const vn=Object.keys(byV);
+  mkChart('ch-pr-prebuy','bar',{labels:vn.map(v=>v.split(' ')[0]+' (+'+byV[v].pct+'% in '+byV[v].days+'d)'),datasets:[
+    {label:'Cash outlay at today\'s cost',data:vn.map(v=>byV[v].cash),backgroundColor:'#9fb0cc'},
+    {label:'Savings captured',data:vn.map(v=>byV[v].sav),backgroundColor:'#1E9E5A'}]},
+    {scales:{y:{ticks:{callback:x=>'$'+fmtN(x)}}}});
+  document.getElementById('pr-prebuy-note').innerHTML=`<span>Guardrail: pre-buy capped at 6 weeks of supply per style — beyond that, carrying cost and markdown risk eat the saving.</span>`;
+  document.getElementById('pr-prebuy-tbl').innerHTML='<h3>Pre-buy detail by style</h3><div class="hint">Suggested quantity = 6 weeks of demand at current burn rate, priced at today\'s cost.</div>'+table(pb,[
+    {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b><br><span style="color:var(--sub)">+${r.cost_increase_pct}% on ${String(r.effective_date).slice(5,10)}</span>`},
+    {h:'Style',f:r=>`${esc(r.brand)} ${esc(r.style_name)}`},
+    {h:'Wk units',k:'weekly_units',num:1},
+    {h:'Cost',f:r=>fmt$(r.current_cost),num:1},
+    {h:'Δ/unit',f:r=>'$'+Number(r.delta_per_unit).toFixed(2),num:1},
+    {h:'Pre-buy qty',k:'suggested_prebuy_qty',num:1},
+    {h:'Outlay',f:r=>fmt$(r.prebuy_cash_outlay),num:1},
+    {h:'Savings',f:r=>`<b style="color:var(--green)">${fmt$(r.prebuy_savings)}</b>`,num:1}]);
+  const src=await runQ(`SELECT CASE sophistication WHEN 'Tier A' THEN 'EDI 832 price/catalog' WHEN 'Tier B' THEN 'Portal download / RPA' ELSE 'Parsed email + confirm' END AS method, sophistication, count(*) n FROM ${S}.dim_vendor GROUP BY 1,2 ORDER BY 2`);
+  document.getElementById('pr-sources').innerHTML=table(src,[
+    {h:'Tier',k:'sophistication'},
+    {h:'Ingestion method',f:r=>`<span class="chip ${r.sophistication==='Tier A'?'green':r.sophistication==='Tier B'?'blue':'orange'}">${esc(r.method)}</span>`},
+    {h:'Vendors',k:'n',num:1}]);
+},
+async comms(){
+  const s=await runQ(`SELECT status, count(*) n FROM ${S}.task_board_v GROUP BY 1 ORDER BY n DESC`);
+  document.getElementById('c-kpis').innerHTML=s.map(r=>`<div class="kpi ${r.status==='Overdue'?'bad':''}"><div class="lbl">${esc(r.status)}</div><div class="val">${fmtN(r.n)}</div><div class="sub">store tasks</div></div>`).join('');
+  const rows=await runQ(`SELECT * FROM ${S}.task_board_v WHERE status <> 'Done' ORDER BY CASE status WHEN 'Overdue' THEN 0 ELSE 1 END, due_date LIMIT 30`);
+  document.getElementById('c-tbl').innerHTML='<h3>Open task board</h3><div class="hint">Overdue tasks escalate to the district manager — same alert pattern as the labor module.</div>'+table(rows,[
+    {h:'Store',f:r=>`<b>${esc(r.store_id)}</b><br><span style="color:var(--sub)">${esc(r.store_name)}</span>`},
+    {h:'Type',f:r=>`<span class="chip blue">${esc(r.task_type)}</span>`},
+    {h:'Task',k:'title'},
+    {h:'Due',f:r=>String(r.due_date).slice(0,10)},
+    {h:'Status',f:r=>statusChip(r.status)}]);
+},
+async admin(){
+  const rows=await runQ(`SELECT * FROM ${S}.data_health ORDER BY manually_managed DESC, table_name`);
+  document.getElementById('a-tbl').innerHTML='<h3>Table registry & feed freshness</h3><div class="hint">Orange = manually managed/seeded (the housekeeping work stream from the call).</div>'+table(rows,[
+    {h:'Table',f:r=>`<span class="mono" style="font-size:11.5px;${r.manually_managed==='true'?'color:var(--orange);font-weight:700':''}">${esc(r.table_name)}</span>`},
+    {h:'Source',k:'source'},
+    {h:'Manual',f:r=>r.manually_managed==='true'?'<span class="chip orange">MANUAL</span>':'<span class="chip green">FEED</span>'},
+    {h:'Cadence',k:'refresh_cadence'},{h:'Owner',k:'owner'},
+    {h:'Last load',f:r=>String(r.last_load_at).slice(0,16)}]);
+},
+};
+nav(); build(); show('command');
+</script>
+</body>
+</html>
