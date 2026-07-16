@@ -45,7 +45,11 @@ OBJECT_REF = re.compile(r"sset1000\.supplychain\.(\w+)", re.IGNORECASE)
 
 app = FastAPI(title="ww-merch-ops")
 _cfg = Config()  # Databricks App SP locally falls back to env/profile auth
-WAREHOUSE_HTTP_PATH = os.environ.get("DATABRICKS_WAREHOUSE_HTTP_PATH", "")
+
+# The `warehouse` app resource may inject either the bare warehouse id or the
+# full HTTP path depending on platform version; accept both.
+_wh = os.environ.get("DATABRICKS_WAREHOUSE_HTTP_PATH", "")
+WAREHOUSE_HTTP_PATH = _wh if _wh.startswith("/") else (f"/sql/1.0/warehouses/{_wh}" if _wh else "")
 
 
 class QueryRequest(BaseModel):
