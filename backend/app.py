@@ -35,6 +35,10 @@ ALLOWED_OBJECTS = {
     "markdown_season_v", "markdown_ladder_v", "demand_timeline_v", "proposed_po_v",
     # registry tables the UI reads directly
     "markdown_policy", "experiments", "data_health", "dim_vendor",
+    # merchandising-owned reference tables (read-only grids in Admin; the
+    # editor stages changes in the browser and never writes back)
+    "item_crossref", "size_curves", "store_sku_params",
+    "vendor_lead_times", "vendor_tier_pricing",
 }
 
 FORBIDDEN = re.compile(
@@ -43,7 +47,10 @@ FORBIDDEN = re.compile(
 )
 OBJECT_REF = re.compile(r"sset1000\.supplychain\.(\w+)", re.IGNORECASE)
 
+from .ask_endpoint import router as ask_router
+
 app = FastAPI(title="ww-merch-ops")
+app.include_router(ask_router)
 _cfg = Config()  # Databricks App SP locally falls back to env/profile auth
 
 # The `warehouse` app resource may inject either the bare warehouse id or the
