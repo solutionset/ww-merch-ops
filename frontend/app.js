@@ -82,8 +82,8 @@ const SECTIONS=[
   note:'Natural-language analyst over the governed layer. Every answer shows the SQL it ran.',
   subs:[{id:'ask',label:'Ask SolutionSet'}]},
  {id:'comms', label:'Communications',
-  note:'Condition → event → typed communication, with store task tracking and overdue escalation.',
-  subs:[{id:'comms',label:'Team Comms & tasks'}]},
+  note:'Condition → alert → typed communication. Build the rule, set how loud it is, route it, then audit. The monthly board pack is the outbound version of the same facts.',
+  subs:[{id:'comms',label:'Team Comms & tasks'},{id:'calert',label:'Alerting', under:'comms'},{id:'cpack',label:'Board package', under:'comms'}]},
  {id:'admin', label:'Admin',
   note:'Feed freshness and stewardship of the tables merchandising owns by hand.',
   subs:[{id:'admin',label:'Data health'},{id:'refedit',label:'Reference tables'}]},
@@ -91,7 +91,65 @@ const SECTIONS=[
 const PANELS=[]; SECTIONS.forEach(s=>s.subs.forEach(x=>PANELS.push({id:x.id,label:x.label,sec:s.id})));
 const secOf=id=>(PANELS.find(p=>p.id===id)||{}).sec;
 let curSec='overview', curPanel='ov-exec';
-const loaded={}; const charts={};
+const loaded={}; const charts={}; const periodStamp={};
+const PERIODS=[
+  {id:'this',label:'This week'},
+  {id:'last',label:'Last week'},
+  {id:'w4',label:'Last 4 weeks'},
+  {id:'w13',label:'Last 13 weeks'},
+  {id:'ytd',label:'YTD'},
+  {id:'ttm',label:'TTM'},
+];
+let curPeriod='w13';
+function periodPillsHtml(){
+  return `<div class="period-pills" role="tablist" aria-label="Time period">${PERIODS.map(p=>
+    `<button type="button" data-p="${p.id}" class="${p.id===curPeriod?'active':''}">${p.label}</button>`).join('')}</div>`;
+}
+function periodLabel(){ return (PERIODS.find(p=>p.id===curPeriod)||{}).label||''; }
+function sliceByPeriod(rows, dateKey, grain){
+  const sorted=[...rows].sort((a,b)=>String(a[dateKey]).localeCompare(String(b[dateKey])));
+  const n=sorted.length, yr=ANCHOR.slice(0,4), p=curPeriod;
+  const empty={cur:[],prv:[],spark:sorted};
+  if(!n) return empty;
+  if(grain==='month'){
+    if(p==='this'||p==='w4') return {cur:sorted.slice(-1), prv:sorted.slice(-2,-1), spark:sorted.slice(-12)};
+    if(p==='last') return {cur:sorted.slice(-2,-1), prv:sorted.slice(-3,-2), spark:sorted.slice(-12)};
+    if(p==='w13') return {cur:sorted.slice(-3), prv:sorted.slice(-6,-3), spark:sorted.slice(-12)};
+    if(p==='ytd'){
+      const cur=sorted.filter(r=>String(r[dateKey]).slice(0,4)===yr);
+      const prv=sorted.filter(r=>String(r[dateKey]).slice(0,4)===String(+yr-1)).slice(-cur.length);
+      return {cur, prv, spark:cur.length?cur:sorted};
+    }
+    return {cur:sorted.slice(-12), prv:sorted.slice(-24,-12), spark:sorted.slice(-12)};
+  }
+  if(p==='this') return {cur:sorted.slice(-1), prv:sorted.slice(-2,-1), spark:sorted.slice(-13)};
+  if(p==='last') return {cur:sorted.slice(-2,-1), prv:sorted.slice(-3,-2), spark:sorted.slice(-14)};
+  if(p==='w4') return {cur:sorted.slice(-4), prv:sorted.slice(-8,-4), spark:sorted.slice(-8)};
+  if(p==='w13') return {cur:sorted.slice(-13), prv:sorted.slice(-26,-13), spark:sorted.slice(-26)};
+  if(p==='ytd'){
+    const cur=sorted.filter(r=>String(r[dateKey]).slice(0,4)===yr);
+    const prv=sorted.filter(r=>String(r[dateKey]).slice(0,4)===String(+yr-1)).slice(-cur.length);
+    return {cur, prv, spark:cur.length?cur:sorted};
+  }
+  return {cur:sorted.slice(-52), prv:sorted.slice(-104,-52), spark:sorted.slice(-52)};
+}
+function sumK(a,k){ return a.reduce((x,r)=>x+(+r[k]||0),0); }
+function pctD(c,p){ return (p&&isFinite(p)&&p!==0)? ((c-p)/Math.abs(p))*100 : null; }
+function mmd(s){
+  const d=new Date(String(s).slice(0,10)+'T00:00:00Z');
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});
+}
+function axisFrom(rows, dateKey){
+  if(!rows.length) return {axisL:'', axisR:'', axisM:periodLabel()};
+  return {axisL:mmd(rows[0][dateKey]), axisR:mmd(rows[rows.length-1][dateKey]), axisM:periodLabel()};
+}
+function setPeriod(id){
+  if(!PERIODS.some(p=>p.id===id) || id===curPeriod) return;
+  curPeriod=id;
+  document.querySelectorAll('.period-pills button').forEach(b=>b.classList.toggle('active', b.dataset.p===id));
+  loaded[curPanel]=false; periodStamp[curPanel]=null;
+  show(curPanel, {quiet:true});
+}
 function nav(){
   document.getElementById('tabs').innerHTML=SECTIONS.map(s=>
     `<button data-s="${s.id}" class="${s.id===curSec?'active':''}">${s.label}</button>`).join('');
@@ -108,18 +166,19 @@ function sidenav(){
     `<button data-p="${x.id}" class="${x.id===curPanel?'active':''}${x.under?' nest':''}">${x.label}</button>`).join('');
   document.querySelectorAll('#sidenav button').forEach(b=>b.onclick=()=>show(b.dataset.p));
 }
-function show(id){
+function show(id, opts){
   curPanel=id; curSec=secOf(id);
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('active',b.dataset.s===curSec));
   sidenav();
   document.querySelectorAll('.module').forEach(d=>d.style.display=d.id==='mod-'+id?'':'none');
-  window.scrollTo({top:0,behavior:'smooth'});
-  if(!loaded[id]){loaded[id]=true; LOADERS[id]&&LOADERS[id]().catch(e=>{
+  if(!(opts&&opts.quiet)) window.scrollTo({top:0,behavior:'smooth'});
+  const stale=!loaded[id] || periodStamp[id]!==curPeriod;
+  if(stale){loaded[id]=true; periodStamp[id]=curPeriod; LOADERS[id]&&LOADERS[id]().catch(e=>{
     const el=document.querySelector('#mod-'+id+' .autoload'); if(el) el.innerHTML='<div class="err">'+esc(e.message)+'</div>'; console.error(e);
   });}
 }
-function header(m,title,sub){
-  return `<h1>${title}</h1><div class="subtitle">${sub}</div>`;
+function header(m,title,sub,opts){
+  return `<h1>${title}</h1><div class="subtitle">${sub}</div>${opts&&opts.period?periodPillsHtml():''}`;
 }
 function table(rows, cols){
   if(!rows.length) return '<div class="loading">No rows.</div>';
@@ -128,7 +187,7 @@ function table(rows, cols){
   return `<div class="tblwrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 function statusChip(s){
-  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue','Proposed':'gray','Delay':'orange','Review':'purple','Assigned':'blue','Exported':'green','Clear':'green','Debit':'blue','Posted':'green','PriceVariance':'orange','QtyShort':'red','Freight':'purple','CostVariance':'orange','Transfer':'purple','Expedite':'red','Event buy':'blue','Watch':'gray','Too late':'red'};
+  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue','Proposed':'gray','Delay':'orange','Review':'purple','Assigned':'blue','Exported':'green','Clear':'green','Debit':'blue','Posted':'green','PriceVariance':'orange','QtyShort':'red','Freight':'purple','CostVariance':'orange','Transfer':'purple','Expedite':'red','Event buy':'blue','Watch':'gray','Too late':'red','Quiet':'gray','Act':'blue','Escalate':'red','Fired':'orange','Muted':'gray','Delivered':'green','Failed':'red','Draft':'gray','Published':'green','Paused':'orange','Live':'green','Digest':'purple','Instant':'blue'};
   return `<span class="chip ${map[s]||'gray'}">${esc(s)}</span>`;
 }
 function build(){
@@ -136,40 +195,79 @@ function build(){
   main.innerHTML=PANELS.map(p=>`<div class="module" id="mod-${p.id}" style="${p.id===curPanel?'':'display:none'}">${SHELLS[p.id](p)}</div>`).join('');
 }
 // ---------------- sparkline ----------------
-function spark(vals,color){
-  const W=160,H=34,pad=3;
-  const v=vals.filter(x=>isFinite(x));
-  if(v.length<2) return '<div style="height:34px"></div>';
-  const mn=Math.min(...v), mx=Math.max(...v), rng=(mx-mn)||1;
-  const pts=v.map((x,i)=>[pad+i*(W-2*pad)/(v.length-1), H-pad-((x-mn)/rng)*(H-2*pad)]);
-  const d=pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
-  const area=d+` L${pts[pts.length-1][0].toFixed(1)},${H} L${pts[0][0].toFixed(1)},${H} Z`;
-  const last=pts[pts.length-1];
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="overflow:visible">
+function fmtSpark(kind,x){
+  if(x==null||!isFinite(x)) return '—';
+  if(kind==='money') return fmt$(x);
+  if(kind==='pct') return Number(x).toFixed(1)+'%';
+  if(kind==='aur') return '$'+Number(x).toFixed(2);
+  return fmtN(x);
+}
+function spark(vals,color,labels,fmt){
+  const W=160,H=36,pad=4;
+  const v=vals.map(x=>+x);
+  const ok=v.map((x,i)=>({x,i})).filter(p=>isFinite(p.x));
+  if(ok.length<2) return '<div style="height:36px"></div>';
+  const mn=Math.min(...ok.map(p=>p.x)), mx=Math.max(...ok.map(p=>p.x)), rng=(mx-mn)||1;
+  const pts=v.map((x,i)=>{
+    const y=isFinite(x)? H-pad-((x-mn)/rng)*(H-2*pad) : H/2;
+    return [pad+i*(W-2*pad)/Math.max(v.length-1,1), y, x, i];
+  });
+  const drawn=pts.filter(p=>isFinite(p[2]));
+  const d=drawn.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const last=drawn[drawn.length-1];
+  const area=d+` L${last[0].toFixed(1)},${H} L${drawn[0][0].toFixed(1)},${H} Z`;
+  const labs=labels||[];
+  const hits=pts.map(p=>`<circle class="spkhit" data-i="${p[3]}" data-v="${p[2]}" data-l="${esc(labs[p[3]]||'')}" data-f="${esc(fmt||'num')}"
+      cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="7" fill="transparent"/>
+    <circle class="spkdot" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2" fill="${color}"/>`).join('');
+  return `<svg class="spk" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="overflow:visible">
     <path d="${area}" fill="${color}" fill-opacity=".13"/>
     <path d="${d}" fill="none" stroke="${color}" stroke-width="1.7" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
     <line x1="${last[0].toFixed(1)}" y1="${(last[1]-3.2).toFixed(1)}" x2="${last[0].toFixed(1)}" y2="${(last[1]+3.2).toFixed(1)}"
-      stroke="${color}" stroke-width="2.4" vector-effect="non-scaling-stroke"/></svg>`;
+      stroke="${color}" stroke-width="2.4" vector-effect="non-scaling-stroke"/>${hits}</svg>`;
 }
 function sparkKPI(o){
   const d=o.deltaPct;
   const cls=d==null?'flat':(o.inverse? (d<0?'up':d>0?'dn':'flat') : (d>0?'up':d<0?'dn':'flat'));
   const arrow=d==null?'':(d>0?'▲':d<0?'▼':'■');
-  const dtxt=d==null?'no prior period':`${arrow} ${Math.abs(d).toFixed(1)}% vs prior ${o.periodLabel}`;
-  return `<div class="kpi">
+  const dtxt=d==null?(o.sub||''):`${arrow} ${Math.abs(d).toFixed(1)}% vs prior`;
+  const tone=o.tone?` ${o.tone}`:'';
+  const labs=o.labels||[];
+  return `<div class="kpi${tone}">
     <div class="lbl">${o.label}</div>
     <div class="val">${o.value}</div>
     <div class="delta ${cls}">${dtxt}</div>
-    <div class="spkwrap">${spark(o.series,o.color||'#2E5BFF')}</div>
-    <div class="spkaxis"><span>${o.axisL}</span><span class="mid">${o.axisM}</span><span>${o.axisR}</span></div>
+    <div class="spkwrap">${spark(o.series||[], o.color||'#2E5BFF', labs, o.fmt||'num')}</div>
+    <div class="spkaxis"><span>${o.axisL||''}</span><span class="mid">${o.axisM||''}</span><span>${o.axisR||''}</span></div>
   </div>`;
+}
+function paintKpis(id, items){
+  const el=document.getElementById(id); if(!el) return;
+  el.classList.add('spark');
+  el.innerHTML=items.map(sparkKPI).join('');
+  bindSparkHover(el);
+}
+function bindSparkHover(root){
+  let tip=document.getElementById('spktip');
+  if(!tip){ tip=document.createElement('div'); tip.id='spktip'; tip.className='maptip'; document.body.appendChild(tip); }
+  root.querySelectorAll('.spkhit').forEach(c=>{
+    c.onmousemove=ev=>{
+      const v=+c.dataset.v, kind=c.dataset.f||'num';
+      tip.style.display='block';
+      tip.style.left=(ev.clientX+12)+'px'; tip.style.top=(ev.clientY-18)+'px';
+      tip.innerHTML=`<b>${esc(c.dataset.l||'')}</b><br>${fmtSpark(kind,v)}`;
+    };
+    c.onmouseleave=()=>{ tip.style.display='none'; };
+  });
 }
 // ---------------- shared chart helper ----------------
 function mkChart(id,type,data,extra){
   const el=document.getElementById(id); if(!el) return;
   if(charts[id]) charts[id].destroy();
   charts[id]=new Chart(el,{type,data,options:Object.assign({responsive:true,maintainAspectRatio:false,
-    plugins:Object.assign({legend:{labels:{boxWidth:12,font:{size:11}}}},(extra&&extra.plugins)||{}),
+    interaction:{mode:'index',intersect:false},
+    plugins:Object.assign({legend:{labels:{boxWidth:12,font:{size:11}}},
+      tooltip:{enabled:true}},(extra&&extra.plugins)||{}),
     scales:(extra&&extra.scales)||undefined,
     indexAxis:(extra&&extra.indexAxis)||undefined,
     onClick:(extra&&extra.onClick)||undefined},{})});
@@ -200,7 +298,9 @@ function mapSVG(stores, metric, valueOf, selected){
   return `<svg viewBox="0 30 520 560" width="100%" height="480" xmlns="http://www.w3.org/2000/svg">${shapes}${dots}</svg>`;
 }
 // generic bubble map that colours on a good/bad direction rather than the fixed variance rule
-function mapSVG2(stores, valueOf, mode, selected){
+function mapSVG2(stores, valueOf, mode, selected, opt){
+  opt=opt||{};
+  const H=opt.height||470;
   const vals=stores.map(valueOf);
   const maxAbs=Math.max(...vals.map(v=>Math.abs(v)),0.001);
   const shapes=Object.entries(STATE_SHAPES).map(([st,pts])=>{
@@ -211,45 +311,45 @@ function mapSVG2(stores, valueOf, mode, selected){
   const dots=stores.map((s,i)=>{
     const [x,y]=proj(+s.latitude,+s.longitude);
     const v=vals[i], col=colOf(v);
-    const r=4+17*Math.sqrt(Math.abs(v)/maxAbs);
-    return `<circle class="store ${selected===s.store_id?'sel':''}" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${col}" fill-opacity="0.55" stroke="${col}" stroke-width="1.5"/>
-      <text x="${(x+r+3).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="9.5" fill="#5a6880">${s.store_id}</text>`;
+    const r=(opt.compact?3:4)+(opt.compact?12:17)*Math.sqrt(Math.abs(v)/maxAbs);
+    const label=opt.compact?'':`<text x="${(x+r+3).toFixed(1)}" y="${(y+3).toFixed(1)}" font-size="9.5" fill="#5a6880">${s.store_id}</text>`;
+    return `<circle class="store ${selected===s.store_id?'sel':''}" data-i="${i}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${col}" fill-opacity="0.55" stroke="${col}" stroke-width="1.5"/>${label}`;
   }).join('');
-  return `<svg viewBox="0 30 520 560" width="100%" height="470" xmlns="http://www.w3.org/2000/svg">${shapes}${dots}</svg>`;
+  return `<svg viewBox="0 30 520 560" width="100%" height="${H}" xmlns="http://www.w3.org/2000/svg">${shapes}${dots}</svg>`;
 }
 
 const SHELLS={
-'ov-exec':m=>header(m,'Executive summary','One page for the merchandising leadership meeting — trailing performance with prior-period comparison, and the whole network on one map you can re-point at any metric.')+`
-  <div class="kpis spark autoload" id="ov-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus">
-    <h3>Network performance map — pick your metric</h3>
-    <div class="hint">Every store, sized by the metric you choose and filtered to the category, brand or size you care about. Green/red shows direction where direction has meaning; click a store to break it down. This is the same engine the Replenishment page uses — pointed at whatever question is on the table.</div>
-    <div class="controls" id="ov-map-controls"></div>
-    <div class="row37">
+'ov-exec':m=>header(m,'Executive summary','One page for the merchandising leadership meeting — period vs prior, six scorecards beside the network, then the trend and the open-item list.',{period:true})+`
+  <div class="ov-hero autoload">
+    <div class="kpis spark stacked3" id="ov-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+    <div class="card focus ov-mapcard">
+      <h3>Network performance</h3>
+      <div class="hint">Sized by the metric you pick. Hover a store; click for the ranking below.</div>
+      <div class="controls" id="ov-map-controls"></div>
       <div style="position:relative"><div id="ovmap"><div class="loading">{ LOADING }</div></div><div class="maptip" id="ovmaptip"></div></div>
+      <div class="legend" id="ov-map-legend"></div>
       <div id="ov-map-side"><div class="loading">{ SELECT A STORE }</div></div>
     </div>
-    <div class="legend" id="ov-map-legend"></div>
   </div>
   <div class="row2 mt">
-    <div class="card"><h3>Sales &amp; margin — trailing 52 weeks</h3><div class="hint">Net sales with gross margin dollars overlaid. Promo share shows how much of the top line is being bought with price.</div><div class="chartbox"><canvas id="ch-ov-trend"></canvas></div></div>
+    <div class="card"><h3>Sales &amp; margin — selected period</h3><div class="hint">Net sales with gross margin dollars overlaid. Promo share is how much of the top line is bought with price.</div><div class="chartbox"><canvas id="ch-ov-trend"></canvas></div></div>
     <div class="card"><h3>Where the attention goes this week</h3><div class="hint">Open items across every section of the application, largest first.</div><div id="ov-attn"><div class="loading">{ LOADING }</div></div></div>
   </div>`,
-'ov-inv':m=>header(m,'Inventory &amp; service — summary','Rolls up Planning &amp; Purchasing: are we in stock on the sizes that matter, and is the replenishment queue keeping up?')+`
+'ov-inv':m=>header(m,'Inventory &amp; service — summary','Rolls up Planning &amp; Purchasing: are we in stock on the sizes that matter, and is the replenishment queue keeping up?',{period:true})+`
   <div class="kpis autoload" id="ovi-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
   <div class="row2">
     <div class="card"><h3>Size-run health by store</h3><div class="hint">Meat-size breaks are the ones that cost a sale. Detail lives in Planning &amp; Purchasing → Replenishment.</div><div class="chartbox"><canvas id="ch-ovi-runs"></canvas></div></div>
     <div class="card"><h3>Replenishment queue by action</h3><div class="hint">Transfer-first suggestions avoid a purchase entirely.</div><div class="chartbox"><canvas id="ch-ovi-queue"></canvas></div></div>
   </div>
   <div class="card mt"><h3>Most urgent — projected stockouts</h3><div class="hint">Top of the replenishment queue, ordered by days to stockout.</div><div id="ovi-tbl"><div class="loading">{ LOADING }</div></div></div>`,
-'ov-margin':m=>header(m,'Margin &amp; pricing — summary','Rolls up Pricing &amp; Markdowns: going-in margin, what markdowns are taking back, and what price events are about to do to the forecast.')+`
+'ov-margin':m=>header(m,'Margin &amp; pricing — summary','Rolls up Pricing &amp; Markdowns: going-in margin, what markdowns are taking back, and what price events are about to do to the forecast.',{period:true})+`
   <div class="kpis autoload" id="ovm-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
   <div class="row2">
     <div class="card"><h3>Weekly margin dollars vs promo sales</h3><div class="hint">The gap between the bars is the price the top line is paying for volume.</div><div class="chartbox"><canvas id="ch-ovm-margin"></canvas></div></div>
     <div class="card"><h3>Season sell-through vs the markdown ladder</h3><div class="hint">Cumulative sell-through against the policy trigger. Detail in Pricing &amp; Markdowns → Markdown Management.</div><div class="chartbox"><canvas id="ch-ovm-season"></canvas></div></div>
   </div>
   <div class="card mt"><h3>Price &amp; markdown events landing next</h3><div class="hint">Each event carries its store execution state — this is what feeds the finance forecast and the Communications section.</div><div id="ovm-tbl"><div class="loading">{ LOADING }</div></div></div>`,
-'ov-ops':m=>header(m,'Operations &amp; vendors — summary','Rolls up Operations and Vendor Management: how much of the close is clearing itself, what is stuck, and what vendors are telling us.')+`
+'ov-ops':m=>header(m,'Operations &amp; vendors — summary','Rolls up Operations and Vendor Management: how much of the close is clearing itself, what is stuck, and what vendors are telling us.',{period:true})+`
   <div class="kpis autoload" id="ovo-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
   <div class="row2">
     <div class="card"><h3>Variance identified vs recovered</h3><div class="hint">The recovery engine by month; line is auto-clear rate. Line-level clear / debit / hold is <a href="#" onclick="show('matchq');return false">Exception triage</a>.</div><div class="chartbox"><canvas id="ch-ovo-trend"></canvas></div></div>
@@ -387,7 +487,7 @@ ats:m=>header(m,'Vendor Availability (ATS)','What vendors can actually ship — 
 deals:m=>header(m,'Vendor Programs &amp; Opportunity Buys','Tier-break coordination, closeouts, SMUs, preseason books — AI-scored for margin uplift vs weeks-of-supply risk.')+`
   <div class="kpis autoload" id="deal-kpis"></div>
   <div class="card focus" id="deal-tbl"><div class="loading">{ LOADING }</div></div>`,
-match:m=>header(m,'3-Way Match analysis','Why the close is long: every store PO, receiver, invoice and statement on one tree — and whether the nightly engine cleared the line or parked an exception. Work the exceptions next door, not here.')+`
+match:m=>header(m,'3-Way Match analysis','Why the close is long: every store PO, receiver, invoice and statement on one tree — and whether the nightly engine cleared the line or parked an exception. Work the exceptions next door, not here.',{period:true})+`
   <div class="kpis autoload" id="m-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
   <div class="steps steps-4">
     <div class="step"><span class="sn">1</span><div><b>Documents land</b><div>Master PO → store mini-PO → receiver → vendor invoice → master statement. Direct-to-store, not a warehouse ASN.</div></div></div>
@@ -463,7 +563,7 @@ pricing:m=>header(m,'Pricing &amp; Promotion','Vendor price files in → staged 
         <li><b>Execution trail:</b> approved events auto-spawn retag/label tasks per store and an LLM-drafted change digest (Communications).</li>
         <li><b>Promo orchestration:</b> PromoStart/PromoEnd events coordinate POS price, endcap task, and label windows.</li></ul></div>
   </div>`,
-markdown:m=>header(m,'Markdown Management','Fewer, later, smarter markdowns: sell-through triggers the ladder, the floor protects margin, experiments tune the timing, and stores get the label files.')+`
+markdown:m=>header(m,'Markdown Management','Fewer, later, smarter markdowns: sell-through triggers the ladder, the floor protects margin, experiments tune the timing, and stores get the label files.',{period:true})+`
   <div class="steps">
     <div class="step"><span class="sn">1</span><div><b>Trigger, don't calendar</b><div>Sell-through vs the ladder — mark down because the season said so.</div></div></div>
     <div class="step"><span class="sn">2</span><div><b>Protect the floor</b><div>Skip steps that destroy margin. Timing is a test, not a habit.</div></div></div>
@@ -519,9 +619,101 @@ ask:m=>header(m,'Ask SolutionSet','A governed analyst over the merchandising lay
       </div>
     </div>
   </div>`,
-comms:m=>header(m,'Team Communications &amp; Store Tasks','Condition triggers event, event warrants a typed communication: LLM-drafted, human-approved, routed to the right stakeholders — with store checklists and overdue escalation.')+`
-  <div class="kpis autoload" id="c-kpis"></div>
-  <div class="card focus" id="c-tbl"><div class="loading">{ LOADING }</div></div>`,
+comms:m=>header(m,'Team Communications &amp; Store Tasks','Condition triggers an alert. The alert drafts a typed communication. A human approves it. Stores get a checklist. Overdue escalates. The monthly pack is the same facts, outbound.')+`
+  <div class="steps steps-4">
+    <div class="step"><span class="sn">1</span><div><b>Name the workflow</b><div>Meat break, aged 3-way, overdue price file, weather window — each alert is owned by a process, not a mailbox.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Set sensitivity</b><div>Quiet / Watch / Act / Escalate. The same queue, four loudness levels. Change it when the floor is drowning in noise.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Distribute</b><div>Audience, channel, quiet hours, instant vs digest. Then audit who got it and who muted it.</div></div></div>
+    <div class="step"><span class="sn">4</span><div><b>Package the month</b><div>Leadership, district, or stores — one generated pack from the governed layer, not a slide rebuilt by hand.</div></div></div>
+  </div>
+  <div class="kpis autoload mt" id="c-kpis"></div>
+  <div class="row2 mt">
+    <div class="card focus">
+      <h3>Alerting — rules that fire work, not mail</h3>
+      <div class="hint">Build by workflow, set how loud, route, then audit. Nothing sends in this demo; Test fire scores the live queues.</div>
+      <ul class="feat">
+        <li><b>Workflow-owned:</b> replenishment, 3-way close, pricing, markdown, weather window, vendor ATS.</li>
+        <li><b>Sensitivity is a control:</b> Quiet through Escalate, with a numeric tripwire you can move.</li>
+        <li><b>Audit:</b> fired, delivered, muted, failed — so a silent weekend is a setting, not a mystery.</li></ul>
+      <div style="margin-top:12px"><button class="btn" onclick="show('calert')">Open Alerting →</button></div>
+    </div>
+    <div class="card focus">
+      <h3>Monthly update / board package</h3>
+      <div class="hint">Same scorecard the exec summary uses, assembled for a named audience with a period slicer and an export path.</div>
+      <ul class="feat">
+        <li><b>Audience:</b> merchandising leadership, district managers, or store managers — the facts change, the source does not.</li>
+        <li><b>Generate, then send:</b> markdown brief, HTML email, scorecard CSV, Teams post. Nothing leaves the demo until you download.</li></ul>
+      <div style="margin-top:12px"><button class="btn" onclick="show('cpack')">Open Board package →</button></div>
+    </div>
+  </div>
+  <div class="card mt" id="c-comms"><div class="loading">{ LOADING }</div></div>
+  <div class="card mt" id="c-tbl"><div class="loading">{ LOADING }</div></div>`,
+calert:m=>header(m,'Alerting','Build the rule on a workflow, set how loud it is, choose who gets it, then audit what fired. This is the inbound half of Communications — the outbound half is the board package.')+`
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>Pick the workflow</b><div>An alert without an owner becomes a newsletter. These are named processes with a queue behind them.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Sensitivity</b><div>Four bands plus a tripwire. Test fire against the live warehouse so you see the volume before you turn it on.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Distribute and audit</b><div>Audience, channel, quiet hours. Then the log: fired, delivered, muted, failed.</div></div></div>
+  </div>
+  <div class="kpis autoload mt" id="al-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus mt">
+    <h3>Step 1 — workflow catalog</h3>
+    <div class="hint">Each rule scores a live queue. Select one, then set how loud it is. Status is local to this session — Databricks is not written.</div>
+    <div class="pg-rules" id="al-wfs"></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card">
+      <h3>Step 2 — sensitivity</h3>
+      <div class="hint" id="al-sens-hint">Choose a band, then move the tripwire. Test fire shows who would be paged right now.</div>
+      <div class="sens-pills" id="al-bands"></div>
+      <div class="controls" id="al-sens-controls"></div>
+      <div class="pg-actions" style="margin-top:8px">
+        <button class="btn" id="al-test">Test fire</button>
+        <button class="btn ghost" id="al-toggle">Pause rule</button>
+        <span id="al-sens-msg" style="align-self:center;font-size:12px;color:var(--sub)"></span>
+      </div>
+      <div id="al-hit" class="mt"></div>
+    </div>
+    <div class="card">
+      <h3>Step 3 — distribute</h3>
+      <div class="hint">Who hears it, on what channel, and when we are allowed to make noise. Digest collapses a night of fires into the morning pack.</div>
+      <div class="controls" id="al-dist-controls"></div>
+      <div id="al-dist-note" class="hint" style="margin-top:8px"></div>
+    </div>
+  </div>
+  <div class="card mt">
+    <h3>Audit log</h3>
+    <div class="hint">Last simulated fires from the current warehouse snapshot. Muted = quiet hours or the rule is paused. Failed = channel bounce (demo).</div>
+    <div id="al-audit"><div class="loading">{ TEST FIRE TO POPULATE }</div></div>
+  </div>`,
+cpack:m=>header(m,'Monthly update / board package','Assemble the leadership, district, or store pack from the governed layer. Pick the audience and the period, generate the brief, then send it the way that audience already reads.',{period:true})+`
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>Name the audience</b><div>Leadership wants the scorecard and the open-item list. Districts want stores. Stores want their own tasks.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Generate the pack</b><div>Facts come from the same views as Overview. The model can write the narrative; the numbers stay governed.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Send on their channel</b><div>PDF-style brief, HTML email, scorecard CSV, Teams post, SharePoint drop. Nothing posts in this demo until you download.</div></div></div>
+  </div>
+  <div class="kpis autoload mt" id="pk-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus mt">
+    <h3>Step 1 — who this pack is for</h3>
+    <div class="hint">Audience changes the sections and the verbs. The warehouse does not. Period pills above slice the sales and recovery facts.</div>
+    <div class="pg-tabs" id="pk-aud"></div>
+    <div class="pg-rules" id="pk-secs"></div>
+    <div class="pg-actions">
+      <button class="btn" id="pk-gen">Generate package</button>
+      <button class="btn ghost" id="pk-ai">AI Build the narrative</button>
+      <span id="pk-msg" style="align-self:center;font-size:12px;color:var(--sub)"></span>
+    </div>
+  </div>
+  <div class="card mt">
+    <h3>Step 2 — package preview</h3>
+    <div class="hint">What would go in the pack. Edit nothing here in the demo; regenerate if the period or audience changed.</div>
+    <div id="pk-preview" class="pack-preview"><div class="loading" style="padding:16px">{ GENERATE TO PREVIEW }</div></div>
+  </div>
+  <div class="card mt" id="pk-export-card">
+    <h3>Step 3 — distribute the pack</h3>
+    <div class="hint">Same brief, several outbound paths. Pick one to preview the file. Marking sent is session-only.</div>
+    <div class="export-grid" id="pk-export-grid"></div>
+    <div id="pk-export-preview"></div>
+  </div>`,
 admin:m=>header(m,'Data Health','Feed freshness and crossref completeness — housekeeping made visible. Reference-table stewardship moves to the next page.')+`
   <div class="card focus autoload" id="a-tbl"><div class="loading">{ LOADING }</div></div>`,
 refedit:m=>header(m,'Reference Tables','The tables merchandising owns by hand — size curves, markdown policy, lead times, tier pricing, replenishment parameters, vendor crossrefs. Edit here, review the change set, then submit it.')+`
@@ -665,71 +857,58 @@ ${JSON.stringify(facts)}`;
 // ---------------- loaders ----------------
 const LOADERS={
 async 'ov-exec'(){
-  // ---------- KPI strip with sparklines ----------
   let tr=await runQ(`SELECT * FROM ${S}.sales_trend_v ORDER BY week_start`);
-  // drop a trailing partial week (anchor lands mid-week)
   if(tr.length>3){
     const med=[...tr].map(r=>+r.net_sales).sort((a,b)=>a-b)[Math.floor(tr.length/2)];
     if(+tr[tr.length-1].net_sales < med*0.4) tr=tr.slice(0,-1);
   }
-  const W=tr.slice(-26), N=13;
-  const cur=tr.slice(-N), prv=tr.slice(-2*N,-N);
-  const sum=(a,k)=>a.reduce((x,r)=>x+ +r[k],0);
-  const pctD=(c,p)=> (p&&isFinite(p)&&p!==0)? ((c-p)/Math.abs(p))*100 : null;
-  const mmd=s=>{const d=new Date(String(s).slice(0,10)+'T00:00:00Z');
-    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});};
-  const axL=mmd(W[0].week_start), axR=mmd(W[W.length-1].week_start);
-  const cS=sum(cur,'net_sales'), pS=sum(prv,'net_sales');
-  const cM=sum(cur,'margin_dollars'), pM=sum(prv,'margin_dollars');
-  const cU=sum(cur,'units'), pU=sum(prv,'units');
-  const cP=sum(cur,'promo_sales'), pP=sum(prv,'promo_sales');
-  const cR=sum(cur,'rain_day_sales'), pR=sum(prv,'rain_day_sales');
+  const sl=sliceByPeriod(tr,'week_start','week');
+  const {cur,prv,spark:W}=sl;
+  const ax=axisFrom(W,'week_start');
+  const labs=W.map(r=>mmd(r.week_start));
+  const cS=sumK(cur,'net_sales'), pS=sumK(prv,'net_sales');
+  const cM=sumK(cur,'margin_dollars'), pM=sumK(prv,'margin_dollars');
+  const cU=sumK(cur,'units'), pU=sumK(prv,'units');
+  const cP=sumK(cur,'promo_sales'), pP=sumK(prv,'promo_sales');
   const sMar=W.map(r=>+r.net_sales? 100*(+r.margin_dollars)/(+r.net_sales):0);
   const sAUR=W.map(r=>+r.units? (+r.net_sales)/(+r.units):0);
   const sPro=W.map(r=>+r.net_sales? 100*(+r.promo_sales)/(+r.net_sales):0);
-  const peak=(arr,f)=>f(Math.max(...arr));
-  const K=[
-   {label:'Net sales', value:fmt$(cS), deltaPct:pctD(cS,pS), periodLabel:'13 wks', series:W.map(r=>+r.net_sales),
-    color:'#2E5BFF', axisL:axL, axisM:'peak '+fmt$(Math.max(...W.map(r=>+r.net_sales))), axisR:axR},
-   {label:'Gross margin $', value:fmt$(cM), deltaPct:pctD(cM,pM), periodLabel:'13 wks', series:W.map(r=>+r.margin_dollars),
-    color:'#1E9E5A', axisL:axL, axisM:'peak '+fmt$(Math.max(...W.map(r=>+r.margin_dollars))), axisR:axR},
-   {label:'Margin %', value:(cS? (100*cM/cS):0).toFixed(1)+'%', deltaPct:pctD(cS?cM/cS:0, pS?pM/pS:0), periodLabel:'13 wks',
-    series:sMar, color:'#1F2A44', axisL:axL, axisM:`${Math.min(...sMar).toFixed(0)}–${Math.max(...sMar).toFixed(0)}%`, axisR:axR},
-   {label:'Units sold', value:fmtN(cU), deltaPct:pctD(cU,pU), periodLabel:'13 wks', series:W.map(r=>+r.units),
-    color:'#7C4DBE', axisL:axL, axisM:'peak '+fmtN(Math.max(...W.map(r=>+r.units))), axisR:axR},
-   {label:'Average unit retail', value:'$'+(cU? cS/cU:0).toFixed(2), deltaPct:pctD(cU?cS/cU:0, pU?pS/pU:0), periodLabel:'13 wks',
-    series:sAUR, color:'#1B9E9E', axisL:axL, axisM:`$${Math.min(...sAUR).toFixed(0)}–$${Math.max(...sAUR).toFixed(0)}`, axisR:axR},
-   {label:'Promo share of sales', value:(cS?100*cP/cS:0).toFixed(1)+'%', deltaPct:pctD(cS?cP/cS:0, pS?pP/pS:0), periodLabel:'13 wks',
-    inverse:true, series:sPro, color:'#C55A11', axisL:axL, axisM:`${Math.min(...sPro).toFixed(0)}–${Math.max(...sPro).toFixed(0)}%`, axisR:axR},
-   {label:'Rain-day sales', value:fmt$(cR), deltaPct:pctD(cR,pR), periodLabel:'13 wks', series:W.map(r=>+r.rain_day_sales),
-    color:'#4A79C7', axisL:axL, axisM:'weather-driven demand', axisR:axR},
-  ];
-  document.getElementById('ov-kpis').innerHTML=K.map(sparkKPI).join('');
-  // ---------- trend chart ----------
-  const labels=tr.map(r=>String(r.week_start).slice(0,10));
-  mkChart('ch-ov-trend','bar',{labels,datasets:[
-    {label:'Net sales',type:'line',data:tr.map(r=>+r.net_sales),borderColor:'#2E5BFF',backgroundColor:'rgba(46,91,255,.08)',fill:true,tension:.3,pointRadius:0,borderWidth:2,order:1},
-    {label:'Gross margin $',data:tr.map(r=>+r.margin_dollars),backgroundColor:'#1F2A44',order:2},
-    {label:'Promo sales',data:tr.map(r=>+r.promo_sales),backgroundColor:'#C55A11',order:2}]},
+  paintKpis('ov-kpis',[
+   {label:'Net sales', value:fmt$(cS), deltaPct:pctD(cS,pS), series:W.map(r=>+r.net_sales), labels:labs, fmt:'money',
+    color:'#2E5BFF', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Gross margin $', value:fmt$(cM), deltaPct:pctD(cM,pM), series:W.map(r=>+r.margin_dollars), labels:labs, fmt:'money',
+    color:'#1E9E5A', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Margin %', value:(cS? (100*cM/cS):0).toFixed(1)+'%', deltaPct:pctD(cS?cM/cS:0, pS?pM/pS:0),
+    series:sMar, labels:labs, fmt:'pct', color:'#1F2A44', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Units sold', value:fmtN(cU), deltaPct:pctD(cU,pU), series:W.map(r=>+r.units), labels:labs, fmt:'num',
+    color:'#7C4DBE', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Average unit retail', value:'$'+(cU? cS/cU:0).toFixed(2), deltaPct:pctD(cU?cS/cU:0, pU?pS/pU:0),
+    series:sAUR, labels:labs, fmt:'aur', color:'#1B9E9E', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Promo share of sales', value:(cS?100*cP/cS:0).toFixed(1)+'%', deltaPct:pctD(cS?cP/cS:0, pS?pP/pS:0),
+    inverse:true, series:sPro, labels:labs, fmt:'pct', color:'#C55A11', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+  ]);
+  const chartRows=cur.length?cur:W;
+  mkChart('ch-ov-trend','bar',{labels:chartRows.map(r=>String(r.week_start).slice(0,10)),datasets:[
+    {label:'Net sales',type:'line',data:chartRows.map(r=>+r.net_sales),borderColor:'#2E5BFF',backgroundColor:'rgba(46,91,255,.08)',fill:true,tension:.3,pointRadius:2,borderWidth:2,order:1},
+    {label:'Gross margin $',data:chartRows.map(r=>+r.margin_dollars),backgroundColor:'#1F2A44',order:2},
+    {label:'Promo sales',data:chartRows.map(r=>+r.promo_sales),backgroundColor:'#C55A11',order:2}]},
     {scales:{x:{ticks:{maxTicksLimit:12}},y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}});
-  // ---------- killer visual: parameterized network map ----------
   const V=await runQ(`SELECT * FROM ${S}.store_variance_v`);
   const cats=uniq(V.map(r=>r.category)).sort(), brands=uniq(V.map(r=>r.brand)).sort(), sizes=uniq(V.map(r=>r.size)).sort(sizeSort);
   document.getElementById('ov-map-controls').innerHTML=`
    <div><label>Metric</label><select id="ov-metric">
-     <option value="var">Sales vs plan variance %</option>
+     <option value="var">Sales vs plan %</option>
      <option value="sales">Actual sales $</option>
      <option value="units">Actual units</option>
-     <option value="lost">Lost sales $ (stockouts)</option>
-     <option value="outs">Stockout positions</option>
+     <option value="lost">Lost sales $</option>
+     <option value="outs">Stockouts</option>
      <option value="meat">Meat-size breaks</option></select></div>
    <div><label>Category</label><select id="ov-cat"><option value="">All</option>${cats.map(c=>`<option>${c}</option>`).join('')}</select></div>
    <div><label>Brand</label><select id="ov-brand"><option value="">All</option>${brands.map(c=>`<option>${c}</option>`).join('')}</select></div>
-   <div><label>Size</label><select id="ov-size"><option value="">All</option>${sizes.map(c=>`<option>${c}</option>`).join('')}</select></div>
-   <div><label>Break down by</label><select id="ov-dim"><option value="category">Category</option><option value="brand">Brand</option><option value="size">Size</option></select></div>`;
+   <div><label>Size</label><select id="ov-size"><option value="">All</option>${sizes.map(c=>`<option>${c}</option>`).join('')}</select></div>`;
   const g=id=>document.getElementById(id).value;
-  let ovSel=null;
-  const META={var:{t:'Sales vs plan variance %',mode:'signed',f:x=>(x>0?'+':'')+x.toFixed(1)+'%'},
+  let ovSel=null, ovDim='category';
+  const META={var:{t:'Sales vs plan %',mode:'signed',f:x=>(x>0?'+':'')+x.toFixed(1)+'%'},
               sales:{t:'Actual sales $',mode:'neutral',f:x=>fmt$(x)},
               units:{t:'Actual units',mode:'neutral',f:x=>fmtN(x)},
               lost:{t:'Lost sales $',mode:'bad',f:x=>fmt$(x)},
@@ -752,13 +931,13 @@ async 'ov-exec'(){
   function ovRender(){
     const m=g('ov-metric'), meta=META[m];
     const stores=ovAgg(ovFilt());
-    document.getElementById('ovmap').innerHTML=mapSVG2(stores, ovVal, meta.mode, ovSel);
+    document.getElementById('ovmap').innerHTML=mapSVG2(stores, ovVal, meta.mode, ovSel, {height:248, compact:true});
     const scope=`${g('ov-cat')||'all categories'}${g('ov-brand')?' / '+g('ov-brand'):''}${g('ov-size')?' / size '+g('ov-size'):''}`;
     document.getElementById('ov-map-legend').innerHTML= meta.mode==='signed'
-      ? `<span><span class="dot" style="background:#1E9E5A"></span>Over plan</span><span><span class="dot" style="background:#C0392B"></span>Under plan</span><span>Metric: <b>${meta.t}</b> · scope: ${scope} · last 8 weeks</span>`
+      ? `<span><span class="dot" style="background:#1E9E5A"></span>Over plan</span><span><span class="dot" style="background:#C0392B"></span>Under plan</span><span>${esc(scope)}</span>`
       : meta.mode==='bad'
-      ? `<span><span class="dot" style="background:#C0392B"></span>Higher = worse</span><span>Metric: <b>${meta.t}</b> · scope: ${scope}</span>`
-      : `<span><span class="dot" style="background:#2E5BFF"></span>Bubble size = ${meta.t.toLowerCase()}</span><span>Scope: ${scope}</span>`;
+      ? `<span><span class="dot" style="background:#C0392B"></span>Higher = worse</span><span>${esc(meta.t)} · ${esc(scope)}</span>`
+      : `<span><span class="dot" style="background:#2E5BFF"></span>${esc(meta.t)}</span><span>${esc(scope)}</span>`;
     const tip=document.getElementById('ovmaptip');
     document.querySelectorAll('#ovmap circle.store').forEach(c=>{
       const s=stores[+c.dataset.i];
@@ -766,7 +945,7 @@ async 'ov-exec'(){
         tip.style.display='block';
         const host=document.getElementById('ovmap').getBoundingClientRect();
         tip.style.left=(ev.clientX-host.left+14)+'px'; tip.style.top=(ev.clientY-host.top-10)+'px';
-        tip.innerHTML=`<b>${s.store_id} — ${esc(s.store_name)}</b><br>${meta.t}: <b>${meta.f(ovVal(s))}</b><br>${fmt$(s.sales)} sales · ${fmtN(s.a)} units vs ${fmtN(Math.round(s.e))} plan<br>${s.outs} outs · ${s.meat} meat breaks · ${fmt$(s.lost)} lost`;
+        tip.innerHTML=`<b>${s.store_id} — ${esc(s.store_name)}</b><br>${meta.t}: <b>${meta.f(ovVal(s))}</b>`;
       });
       c.addEventListener('mouseleave',()=>tip.style.display='none');
       c.addEventListener('click',()=>{ ovSel=(ovSel===s.store_id?null:s.store_id); ovRender(); ovSide(); });
@@ -775,38 +954,32 @@ async 'ov-exec'(){
   function ovSide(){
     const m=g('ov-metric'), meta=META[m], side=document.getElementById('ov-map-side');
     if(!ovSel){
-      const stores=ovAgg(ovFilt()).map(s=>({k:s.store_id+' '+s.store_name.slice(0,14),v:ovVal(s)}));
+      const stores=ovAgg(ovFilt()).map(s=>({id:s.store_id,name:s.store_name,v:ovVal(s)}));
       stores.sort((a,b)=> meta.mode==='signed'? a.v-b.v : b.v-a.v);
-      const top=stores.slice(0,12);
-      side.innerHTML=`<h3 style="margin-bottom:2px">${meta.mode==='signed'?'Weakest 12 stores':'Top 12 stores'}</h3>
-        <div class="hint">Click any bubble on the map to break a single store down.</div>
-        <div class="chartbox tall"><canvas id="ch-ovmapside"></canvas></div>`;
-      mkChart('ch-ovmapside','bar',{labels:top.map(i=>i.k),datasets:[{label:meta.t,data:top.map(i=>+i.v.toFixed(1)),
-        backgroundColor:top.map(i=> meta.mode==='signed'?(i.v<0?'#C0392B':'#1E9E5A'): meta.mode==='bad'?'#C0392B':'#2E5BFF')}]},
-        {indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{callback:x=>meta.f(x)}}}});
+      const top=stores.slice(0,8);
+      side.innerHTML=`<div class="ov-rankhead">${meta.mode==='signed'?'Weakest stores':'Top stores'} · click a row or bubble</div>
+        <div class="ov-rank">${top.map(s=>`<button type="button" data-s="${esc(s.id)}"><span>${esc(s.id)} ${esc(s.name.slice(0,18))}</span><b>${meta.f(s.v)}</b></button>`).join('')}</div>`;
+      side.querySelectorAll('button').forEach(b=>b.onclick=()=>{ ovSel=b.dataset.s; ovRender(); ovSide(); });
       return;
     }
-    const dim=g('ov-dim');
     const rows=ovFilt().filter(r=>r.store_id===ovSel);
     const o={};
-    rows.forEach(r=>{ const k=r[dim]; o[k]=o[k]||{a:0,e:0,sales:0,outs:0,meat:0,lost:0};
+    rows.forEach(r=>{ const k=r[ovDim]; o[k]=o[k]||{a:0,e:0,sales:0,outs:0,meat:0,lost:0};
       o[k].a+=+r.actual_units; o[k].e+=+r.expected_units; o[k].sales+=+r.actual_sales;
       o[k].outs+=+r.outs; o[k].meat+=+r.meat_outs; o[k].lost+=+r.lost_sales; });
     let items=Object.entries(o).map(([k,x])=>({k, v: m==='var'?(x.e>0?100*(x.a-x.e)/x.e:0): m==='sales'?x.sales: m==='units'?x.a: m==='lost'?x.lost: m==='outs'?x.outs:x.meat}));
     items=items.filter(i=>i.v!==0);
     items.sort((p,q)=> meta.mode==='signed'? p.v-q.v : q.v-p.v);
-    if(dim==='size') items.sort((p,q)=>sizeSort(p.k,q.k));
+    if(ovDim==='size') items.sort((p,q)=>sizeSort(p.k,q.k));
     const nm=(ovAgg(rows)[0]||{}).store_name||ovSel;
-    side.innerHTML=`<h3 style="margin-bottom:2px">${ovSel} — ${esc(nm)}</h3>
-      <div class="hint">${meta.t} by ${dim} · click the bubble again to go back to the ranking.</div>
-      <div class="chartbox tall"><canvas id="ch-ovmapside"></canvas></div>`;
-    mkChart('ch-ovmapside','bar',{labels:items.slice(0,14).map(i=>i.k),datasets:[{label:meta.t,
-      data:items.slice(0,14).map(i=>+i.v.toFixed(1)),
-      backgroundColor:items.slice(0,14).map(i=> meta.mode==='signed'?(i.v<0?'#C0392B':'#1E9E5A'): meta.mode==='bad'?'#C0392B':'#2E5BFF')}]},
-      {indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{callback:x=>meta.f(x)}}}});
+    side.innerHTML=`<div class="ov-rankhead"><button type="button" class="ov-back" id="ov-back">← All stores</button> ${esc(ovSel)} ${esc(nm)}
+      <select id="ov-dim"><option value="category">Category</option><option value="brand">Brand</option><option value="size">Size</option></select></div>
+      <div class="ov-rank">${items.slice(0,8).map(i=>`<div><span>${esc(i.k)}</span><b>${meta.f(i.v)}</b></div>`).join('')}</div>`;
+    document.getElementById('ov-dim').value=ovDim;
+    document.getElementById('ov-dim').onchange=()=>{ ovDim=document.getElementById('ov-dim').value; ovSide(); };
+    document.getElementById('ov-back').onclick=()=>{ ovSel=null; ovRender(); ovSide(); };
   }
   ['ov-metric','ov-cat','ov-brand','ov-size'].forEach(id=>document.getElementById(id).onchange=()=>{ovRender();ovSide();});
-  document.getElementById('ov-dim').onchange=ovSide;
   ovRender(); ovSide();
   // ---------- attention list ----------
   const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
@@ -825,24 +998,33 @@ async 'ov-exec'(){
 },
 async 'ov-inv'(){
   const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
-  document.getElementById('ovi-kpis').innerHTML=[
-   ['In-stock rate', kpi.in_stock_pct+'%', kpi.total_outs+' positions out', Number(kpi.in_stock_pct)>=95?'good':'warn'],
-   ['Meat-size breaks', kpi.meat_outs, 'core sizes out now', Number(kpi.meat_outs)>0?'bad':'good'],
-   ['Inventory turns', kpi.inventory_turns, 'guardrail: watch against in-stock', ''],
-   ['Replen queue', kpi.replen_suggestions, kpi.expedite_checks+' need an expedite check', ''],
-   ['Est. lost sales — 30d', fmt$(kpi.est_lost_sales_30d), 'on '+fmt$(kpi.sales_30d)+' of sales', 'warn'],
-  ].map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  const tr=await runQ(`SELECT * FROM ${S}.sales_trend_v ORDER BY week_start`);
+  const sl=sliceByPeriod(tr,'week_start','week');
+  const labs=sl.spark.map(r=>mmd(r.week_start));
+  const ax=axisFrom(sl.spark,'week_start');
   const runs=await runQ(`SELECT store_id, sum(CASE WHEN run_status='MeatBreak' THEN 1 ELSE 0 END) meat, sum(CASE WHEN run_status='FringeBreak' THEN 1 ELSE 0 END) fringe, sum(CASE WHEN run_status='Intact' THEN 1 ELSE 0 END) intact FROM ${S}.size_run_health_v GROUP BY 1 ORDER BY 1`);
+  const q=await runQ(`SELECT action, count(*) n FROM ${S}.replen_queue_v GROUP BY 1 ORDER BY n DESC`);
+  const rows=await runQ(`SELECT * FROM ${S}.replen_queue_v ORDER BY days_to_stockout LIMIT 15`);
+  paintKpis('ovi-kpis',[
+   {label:'In-stock rate', value:kpi.in_stock_pct+'%', sub:kpi.total_outs+' positions out', tone:Number(kpi.in_stock_pct)>=95?'good':'warn',
+    series:runs.map(r=>{const t=+r.meat+ +r.fringe+ +r.intact; return t?100*(+r.intact)/t:0;}), labels:runs.map(r=>r.store_id), fmt:'pct', color:'#1E9E5A', axisL:runs[0]&&runs[0].store_id, axisR:runs[runs.length-1]&&runs[runs.length-1].store_id, axisM:'by store'},
+   {label:'Meat-size breaks', value:kpi.meat_outs, sub:'core sizes out now', tone:Number(kpi.meat_outs)>0?'bad':'good',
+    series:runs.map(r=>+r.meat), labels:runs.map(r=>r.store_id+' meat'), fmt:'num', color:'#C0392B', axisL:'stores', axisM:periodLabel(), axisR:''},
+   {label:'Inventory turns', value:kpi.inventory_turns, sub:'guardrail: watch against in-stock',
+    series:sl.spark.map(r=>+r.units), labels:labs, fmt:'num', color:'#2E5BFF', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Replen queue', value:kpi.replen_suggestions, sub:kpi.expedite_checks+' need an expedite check',
+    series:q.map(r=>+r.n), labels:q.map(r=>r.action), fmt:'num', color:'#7C4DBE', axisL:'queue', axisM:'by action', axisR:''},
+   {label:'Est. lost sales — 30d', value:fmt$(kpi.est_lost_sales_30d), sub:'on '+fmt$(kpi.sales_30d)+' of sales', tone:'warn',
+    series:sl.spark.map(r=>+r.net_sales), labels:labs, fmt:'money', color:'#C55A11', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+  ]);
   mkChart('ch-ovi-runs','bar',{labels:runs.map(r=>r.store_id),datasets:[
     {label:'Meat break',data:runs.map(r=>+r.meat),backgroundColor:'#C0392B'},
     {label:'Fringe break',data:runs.map(r=>+r.fringe),backgroundColor:'#C55A11'},
     {label:'Intact',data:runs.map(r=>+r.intact),backgroundColor:'#1E9E5A'}]},
     {scales:{x:{stacked:true},y:{stacked:true}}});
-  const q=await runQ(`SELECT action, count(*) n FROM ${S}.replen_queue_v GROUP BY 1 ORDER BY n DESC`);
   mkChart('ch-ovi-queue','bar',{labels:q.map(r=>r.action),datasets:[{label:'Suggestions',data:q.map(r=>+r.n),
     backgroundColor:q.map(r=>({Order:'#2E5BFF',TransferFirst:'#7C4DBE',ExpediteCheck:'#C0392B',Hold:'#9fb0cc'})[r.action]||'#2E5BFF')}]},
     {indexAxis:'y',plugins:{legend:{display:false}}});
-  const rows=await runQ(`SELECT * FROM ${S}.replen_queue_v ORDER BY days_to_stockout LIMIT 15`);
   document.getElementById('ovi-tbl').innerHTML=table(rows,[
     {h:'Store',k:'store_id'},{h:'Item',f:r=>`<b>${esc(r.brand)}</b> ${esc(r.style_name)}<br><span style="color:var(--sub)">${esc(r.color)} · ${esc(r.size)}</span>`},
     {h:'Action',f:r=>statusChip(r.action)},{h:'Qty',k:'suggested_qty',num:1},
@@ -858,22 +1040,36 @@ async 'ov-margin'(){
   const floorBreaches=ladder.filter(r=>r.below_floor==='true').length;
   const overdue=pipe.filter(r=>r.workflow_state==='OVERDUE - not staged').length;
   const tOver=pipe.reduce((a,r)=>a+ +r.tasks_overdue,0);
-  document.getElementById('ovm-kpis').innerHTML=[
-   ['Gross margin', kpi.margin_pct+'%', 'trailing 12 months', ''],
-   ['Season sell-through', last.cum_sell_through_pct+'%', fmtN(last.cum_units)+' of est '+fmtN(last.est_season_supply)+' units', +last.cum_sell_through_pct>=60?'good':'warn'],
-   ['Floor breaches in ladder', floorBreaches, 'steps priced below the policy floor', floorBreaches?'warn':'good'],
-   ['Price events in pipeline', pipe.length, overdue+' overdue, not staged', overdue?'bad':''],
-   ['Store tasks overdue', tOver, 'from price & markdown events', tOver?'bad':'good'],
-  ].map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
   const tr=await runQ(`SELECT * FROM ${S}.sales_trend_v ORDER BY week_start`);
-  mkChart('ch-ovm-margin','bar',{labels:tr.map(r=>String(r.week_start).slice(0,10)),datasets:[
-    {label:'Margin $',data:tr.map(r=>+r.margin_dollars),backgroundColor:'#1F2A44'},
-    {label:'Promo sales',data:tr.map(r=>+r.promo_sales),backgroundColor:'#C55A11'}]},
+  const sl=sliceByPeriod(tr,'week_start','week');
+  const seas=sliceByPeriod(season,'week_start','week');
+  const labs=sl.spark.map(r=>mmd(r.week_start));
+  const ax=axisFrom(sl.spark,'week_start');
+  const cM=sumK(sl.cur,'margin_dollars'), cS=sumK(sl.cur,'net_sales');
+  const pM=sumK(sl.prv,'margin_dollars'), pS=sumK(sl.prv,'net_sales');
+  const gm=cS?100*cM/cS:+kpi.margin_pct;
+  paintKpis('ovm-kpis',[
+   {label:'Gross margin', value:gm.toFixed(1)+'%', deltaPct:pctD(cS?cM/cS:0, pS?pM/pS:0),
+    series:sl.spark.map(r=>+r.net_sales?100*(+r.margin_dollars)/(+r.net_sales):0), labels:labs, fmt:'pct', color:'#1E9E5A', axisL:ax.axisL, axisM:ax.axisM, axisR:ax.axisR},
+   {label:'Season sell-through', value:last.cum_sell_through_pct+'%', sub:fmtN(last.cum_units)+' of est '+fmtN(last.est_season_supply)+' units', tone:+last.cum_sell_through_pct>=60?'good':'warn',
+    series:seas.spark.map(r=>+r.cum_sell_through_pct), labels:seas.spark.map(r=>mmd(r.week_start)), fmt:'pct', color:'#2E5BFF', axisL:'season', axisM:periodLabel(), axisR:''},
+   {label:'Floor breaches in ladder', value:floorBreaches, sub:'steps priced below the policy floor', tone:floorBreaches?'warn':'good',
+    series:ladder.map(r=>+r.step_margin_pct), labels:ladder.map(r=>r.step_label||r.style_name), fmt:'pct', color:'#C55A11', axisL:'ladder', axisM:'margin %', axisR:''},
+   {label:'Price events in pipeline', value:pipe.length, sub:overdue+' overdue, not staged', tone:overdue?'bad':'',
+    series:pipe.map(r=>+r.skus_affected), labels:pipe.map(r=>r.event_id), fmt:'num', color:'#7C4DBE', axisL:'events', axisM:'SKUs', axisR:''},
+   {label:'Store tasks overdue', value:tOver, sub:'from price & markdown events', tone:tOver?'bad':'good',
+    series:pipe.map(r=>+r.tasks_overdue), labels:pipe.map(r=>r.event_id), fmt:'num', color:'#C0392B', axisL:'events', axisM:'overdue tasks', axisR:''},
+  ]);
+  const chartRows=sl.cur.length?sl.cur:sl.spark;
+  mkChart('ch-ovm-margin','bar',{labels:chartRows.map(r=>String(r.week_start).slice(0,10)),datasets:[
+    {label:'Margin $',data:chartRows.map(r=>+r.margin_dollars),backgroundColor:'#1F2A44'},
+    {label:'Promo sales',data:chartRows.map(r=>+r.promo_sales),backgroundColor:'#C55A11'}]},
     {scales:{x:{ticks:{maxTicksLimit:12}},y:{ticks:{callback:v=>'$'+(v/1000)+'k'}}}});
-  mkChart('ch-ovm-season','bar',{labels:season.map(r=>String(r.week_start).slice(0,10)),datasets:[
-    {label:'Weekly units',data:season.map(r=>+r.units),backgroundColor:'#9fb0cc',order:3},
-    {label:'Cumulative sell-through %',type:'line',yAxisID:'y1',data:season.map(r=>+r.cum_sell_through_pct),borderColor:'#2E5BFF',borderWidth:2,pointRadius:0,tension:.25,order:1},
-    {label:'Trigger 60%',type:'line',yAxisID:'y1',data:season.map(()=>60),borderColor:'#1F2A44',borderDash:[6,4],borderWidth:1.2,pointRadius:0,order:2}]},
+  const seasonRows=seas.cur.length?seas.cur:season;
+  mkChart('ch-ovm-season','bar',{labels:seasonRows.map(r=>String(r.week_start).slice(0,10)),datasets:[
+    {label:'Weekly units',data:seasonRows.map(r=>+r.units),backgroundColor:'#9fb0cc',order:3},
+    {label:'Cumulative sell-through %',type:'line',yAxisID:'y1',data:seasonRows.map(r=>+r.cum_sell_through_pct),borderColor:'#2E5BFF',backgroundColor:'rgba(46,91,255,.08)',borderWidth:2,pointRadius:2,tension:.25,order:1},
+    {label:'Trigger 60%',type:'line',yAxisID:'y1',data:seasonRows.map(()=>60),borderColor:'#1F2A44',borderDash:[6,4],borderWidth:1.2,pointRadius:0,order:2}]},
     {scales:{x:{ticks:{maxTicksLimit:10}},y:{title:{display:true,text:'units/wk'}},
       y1:{position:'right',min:0,max:100,grid:{drawOnChartArea:false},ticks:{callback:x=>x+'%'}}}});
   const wfChip=s=>({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[s]||'gray';
@@ -893,14 +1089,23 @@ async 'ov-ops'(){
   const recovered=trend.reduce((a,r)=>a+ +r.variance_recovered,0);
   const holds=stmts.filter(r=>r.recon_status!=='Clear to pay');
   const atsItems=ats.reduce((a,r)=>a+ +r.items_reported,0), atsMatched=ats.reduce((a,r)=>a+ +r.items_matched,0);
-  document.getElementById('ovo-kpis').innerHTML=[
-   ['3-way auto-clear', k.auto_clear_pct+'%', k.open_exceptions+' open · '+fmt$(k.open_exception_amt), Number(k.auto_clear_pct)>=90?'good':'warn'],
-   ['Variance recovered', fmt$(recovered), 'trailing 12 months', 'good'],
-   ['Statements on hold', holds.length, 'of '+stmts.length+' — exceptions block payment', holds.length?'warn':'good'],
-   ['Open vendor offers', k.open_deals, fmt$(k.open_deal_savings)+' at commit', 'good'],
-   ['ATS crossref match', atsItems? Math.round(100*atsMatched/atsItems)+'%':'—', fmtN(atsMatched)+' of '+fmtN(atsItems)+' vendor items matched', ''],
-   ['Store tasks', k.open_tasks, k.overdue_tasks+' overdue', Number(k.overdue_tasks)>0?'warn':'good'],
-  ].map(x=>`<div class="kpi ${x[3]}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+  const ms=sliceByPeriod(trend,'match_month','month');
+  const recCur=sumK(ms.cur,'variance_recovered'), recPrv=sumK(ms.prv,'variance_recovered');
+  const acCur=ms.cur.length? ms.cur.reduce((a,r)=>a+ +r.auto_clear_pct,0)/ms.cur.length : +k.auto_clear_pct;
+  paintKpis('ovo-kpis',[
+   {label:'3-way auto-clear', value:acCur.toFixed(1)+'%', sub:k.open_exceptions+' open · '+fmt$(k.open_exception_amt), tone:acCur>=90?'good':'warn',
+    series:ms.spark.map(r=>+r.auto_clear_pct), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'pct', color:'#2E5BFF', axisL:'months', axisM:periodLabel(), axisR:''},
+   {label:'Variance recovered', value:fmt$(recCur||recovered), deltaPct:pctD(recCur, recPrv), tone:'good',
+    series:ms.spark.map(r=>+r.variance_recovered), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'money', color:'#1E9E5A', axisL:'months', axisM:periodLabel(), axisR:''},
+   {label:'Statements on hold', value:holds.length, sub:'of '+stmts.length+' — exceptions block payment', tone:holds.length?'warn':'good',
+    series:stmts.map(r=>+r.open_exception_amt), labels:stmts.map(r=>r.vendor_name), fmt:'money', color:'#C55A11', axisL:'statements', axisM:'open $', axisR:''},
+   {label:'Open vendor offers', value:k.open_deals, sub:fmt$(k.open_deal_savings)+' at commit', tone:'good',
+    series:ats.map(r=>+r.match_rate_pct), labels:ats.map(r=>r.vendor_name), fmt:'pct', color:'#7C4DBE', axisL:'vendors', axisM:'ATS match', axisR:''},
+   {label:'ATS crossref match', value:atsItems? Math.round(100*atsMatched/atsItems)+'%':'—', sub:fmtN(atsMatched)+' of '+fmtN(atsItems)+' vendor items matched',
+    series:ats.map(r=>+r.match_rate_pct), labels:ats.map(r=>r.vendor_name), fmt:'pct', color:'#1B9E9E', axisL:'vendors', axisM:'match %', axisR:''},
+   {label:'Store tasks', value:k.open_tasks, sub:k.overdue_tasks+' overdue', tone:Number(k.overdue_tasks)>0?'warn':'good',
+    series:ms.spark.map(r=>+r.variance_open), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'money', color:'#C0392B', axisL:'months', axisM:'still open $', axisR:''},
+  ]);
   mkChart('ch-ovo-trend','bar',{labels:trend.map(r=>String(r.match_month).slice(0,7)),datasets:[
     {label:'Identified $',data:trend.map(r=>+r.variance_identified),backgroundColor:'#9fb0cc'},
     {label:'Recovered $',data:trend.map(r=>+r.variance_recovered),backgroundColor:'#1E9E5A'},
@@ -1239,13 +1444,18 @@ async wxopp(){
     const act=list.filter(p=>p.play==='Transfer'||p.play==='Expedite'||p.play==='Too late');
     const wxU=list.reduce((a,p)=>a+p.wx,0), cost=list.reduce((a,p)=>a+p.cost,0);
     const meat=list.reduce((a,p)=>a+p.meat,0);
-    document.getElementById('wx-kpis').innerHTML=[
-      ['Window', BANDS[windowId].label.replace(/ .*/,''), BANDS[windowId].hint, ''],
-      ['Weather units', fmtN(Math.round(wxU)), 'in weather-sensitive categories', wxU?'good':''],
-      ['At stores already short', fmtN(act.length), meat+' meat-size breaks in the hit', meat?'warn':''],
-      ['Lift at risk', fmt$(Math.round(cost)), 'weather $ at those locations', cost?'warn':''],
-      ['Too late to buy', fmtN(list.filter(p=>p.play==='Too late').length), 'nowcast + shortage — transfer or miss', ''],
-    ].map(x=>`<div class="kpi ${x[3]}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+    paintKpis('wx-kpis',[
+      {label:'Window', value:BANDS[windowId].label.replace(/ .*/,''), sub:BANDS[windowId].hint,
+        series:list.map(p=>p.wx), labels:list.map(p=>p.store_id+' '+p.category), fmt:'num', color:'#2E5BFF', axisL:'plays', axisM:'wx units', axisR:''},
+      {label:'Weather units', value:fmtN(Math.round(wxU)), sub:'in weather-sensitive categories', tone:wxU?'good':'',
+        series:list.map(p=>p.wx), labels:list.map(p=>p.store_id+' '+p.category), fmt:'num', color:'#1B9E9E', axisL:'plays', axisM:'units', axisR:''},
+      {label:'At stores already short', value:fmtN(act.length), sub:meat+' meat-size breaks in the hit', tone:meat?'warn':'',
+        series:list.map(p=>p.meat), labels:list.map(p=>p.store_id), fmt:'num', color:'#C0392B', axisL:'plays', axisM:'meat', axisR:''},
+      {label:'Lift at risk', value:fmt$(Math.round(cost)), sub:'weather $ at those locations', tone:cost?'warn':'',
+        series:list.map(p=>p.cost), labels:list.map(p=>p.store_id+' '+p.category), fmt:'money', color:'#C55A11', axisL:'plays', axisM:'$', axisR:''},
+      {label:'Too late to buy', value:fmtN(list.filter(p=>p.play==='Too late').length), sub:'nowcast + shortage — transfer or miss',
+        series:list.map(p=>p.play==='Too late'?1:0), labels:list.map(p=>p.store_id), fmt:'num', color:'#1F2A44', axisL:'plays', axisM:'too late', axisR:''},
+    ]);
   }
   function renderMap(list){
     const by={};
@@ -1357,7 +1567,12 @@ async wxopp(){
 
 async replen(){
   const q=await runQ(`SELECT action, count(*) n FROM ${S}.replen_queue_v GROUP BY 1 ORDER BY n DESC`);
-  document.getElementById('rep-kpis').innerHTML=q.map(r=>`<div class="kpi"><div class="lbl">${esc(r.action)}</div><div class="val">${fmtN(r.n)}</div><div class="sub">in current queue</div></div>`).join('');
+  const qRows=await runQ(`SELECT store_id, action, suggested_qty FROM ${S}.replen_queue_v`);
+  paintKpis('rep-kpis', q.map(r=>{
+    const series=qRows.filter(x=>x.action===r.action).map(x=>+x.suggested_qty);
+    const labels=qRows.filter(x=>x.action===r.action).map(x=>x.store_id);
+    return {label:r.action, value:fmtN(r.n), sub:'in current queue', series:series.concat([0,0]), labels:labels.concat(['—','—']), fmt:'num', color:'#2E5BFF', axisL:'stores', axisM:'qty', axisR:''};
+  }));
   // ----- map -----
   const V=await runQ(`SELECT * FROM ${S}.store_variance_v`);
   const ctrl=document.getElementById('map-controls');
@@ -1596,13 +1811,18 @@ async pogen(){
     const s=scoped();
     const n=st=>s.filter(p=>p.status===st).length;
     const $ =st=>s.filter(p=>p.status===st).reduce((a,p)=>a+p.cost,0);
-    document.getElementById('pg-kpis').innerHTML=[
-      ['Proposed store POs', fmtN(s.length), uniq(s.map(p=>p.vendor_id)).length+' master POs'],
-      ['Ready to approve', fmtN(n('Approved')), fmt$($('Approved')), n('Approved')?'good':''],
-      ['Delay / not yet', fmtN(n('Delay')), fmt$($('Delay')), ''],
-      ['Need a teammate', fmtN(n('Review')+n('Assigned')), n('Assigned')+' already assigned', (n('Review')+n('Assigned'))?'warn':''],
-      ['Exported', fmtN(n('Exported')), fmt$($('Exported')), n('Exported')?'good':''],
-    ].map(x=>`<div class="kpi ${x[3]||''}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+    paintKpis('pg-kpis',[
+      {label:'Proposed store POs', value:fmtN(s.length), sub:uniq(s.map(p=>p.vendor_id)).length+' master POs',
+        series:s.map(p=>p.cost), labels:s.map(p=>p.poId||p.store_id), fmt:'money', color:'#2E5BFF', axisL:'POs', axisM:'est. cost', axisR:''},
+      {label:'Ready to approve', value:fmtN(n('Approved')), sub:fmt$($('Approved')), tone:n('Approved')?'good':'',
+        series:s.filter(p=>p.status==='Approved').map(p=>p.cost), labels:s.filter(p=>p.status==='Approved').map(p=>p.poId), fmt:'money', color:'#1E9E5A', axisL:'approve', axisM:'$', axisR:''},
+      {label:'Delay / not yet', value:fmtN(n('Delay')), sub:fmt$($('Delay')),
+        series:s.filter(p=>p.status==='Delay').map(p=>p.cost), labels:s.filter(p=>p.status==='Delay').map(p=>p.poId), fmt:'money', color:'#C55A11', axisL:'delay', axisM:'$', axisR:''},
+      {label:'Need a teammate', value:fmtN(n('Review')+n('Assigned')), sub:n('Assigned')+' already assigned', tone:(n('Review')+n('Assigned'))?'warn':'',
+        series:s.map(p=>(p.status==='Review'||p.status==='Assigned')?p.cost:0), labels:s.map(p=>p.poId), fmt:'money', color:'#7C4DBE', axisL:'queue', axisM:'$', axisR:''},
+      {label:'Exported', value:fmtN(n('Exported')), sub:fmt$($('Exported')), tone:n('Exported')?'good':'',
+        series:s.filter(p=>p.status==='Exported').map(p=>p.cost).concat([0,0]), labels:s.filter(p=>p.status==='Exported').map(p=>p.poId).concat(['—','—']), fmt:'money', color:'#1B9E9E', axisL:'exported', axisM:'$', axisR:''},
+    ]);
   }
   function tabs(){
     const s=scoped();
@@ -1794,11 +2014,14 @@ async ats(){
 async deals(){
   const rows=await runQ(`SELECT * FROM ${S}.deal_pipeline_v ORDER BY CASE status WHEN 'Open' THEN 0 ELSE 1 END, days_to_expiry`);
   const open=rows.filter(r=>r.status==='Open');
-  document.getElementById('deal-kpis').innerHTML=[
-    ['Open offers',open.length,'awaiting decision'],
-    ['Savings at commit',fmt$(open.reduce((a,r)=>a+ +r.savings_at_commit,0)),'if all open offers accepted'],
-    ['Expiring soon',open.filter(r=>+r.days_to_expiry<=7).length,'within 7 days'],
-  ].map(k=>`<div class="kpi"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  paintKpis('deal-kpis',[
+    {label:'Open offers', value:open.length, sub:'awaiting decision',
+      series:open.map(r=>+r.savings_at_commit).concat([0,0]), labels:open.map(r=>r.opp_id).concat(['—','—']), fmt:'money', color:'#2E5BFF', axisL:'offers', axisM:'savings', axisR:''},
+    {label:'Savings at commit', value:fmt$(open.reduce((a,r)=>a+ +r.savings_at_commit,0)), sub:'if all open offers accepted',
+      series:open.map(r=>+r.savings_at_commit).concat([0,0]), labels:open.map(r=>r.vendor_name).concat(['—','—']), fmt:'money', color:'#1E9E5A', axisL:'offers', axisM:'$', axisR:''},
+    {label:'Expiring soon', value:open.filter(r=>+r.days_to_expiry<=7).length, sub:'within 7 days',
+      series:open.map(r=>+r.days_to_expiry).concat([0,0]), labels:open.map(r=>r.opp_id).concat(['—','—']), fmt:'num', color:'#C55A11', axisL:'offers', axisM:'days left', axisR:''},
+  ]);
   document.getElementById('deal-tbl').innerHTML='<h3>Deal pipeline</h3><div class="hint">AI recommendation weighs margin uplift against weeks-of-supply and broken-run risk.</div>'+table(rows,[
     {h:'ID',f:r=>`<span class="mono" style="font-size:11px">${esc(r.opp_id)}</span>`},
     {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b><br><span style="color:var(--sub)">${esc(r.opp_type)}</span>`},
@@ -1822,13 +2045,20 @@ async match(){
   const holds=stmts.filter(r=>r.recon_status!=='Clear to pay');
   const trend=await runQ(`SELECT * FROM ${S}.match_trend_v ORDER BY match_month`);
   const recovered=trend.reduce((a,r)=>a+ +r.variance_recovered,0);
-  document.getElementById('m-kpis').innerHTML=[
-    ['Auto-clear rate',k.auto_clear_pct+'%','of matched lines need no human',''],
-    ['Open exceptions',k.open_exceptions,fmt$(k.open_exception_amt)+' awaiting recovery','warn'],
-    ['Variance recovered',fmt$(recovered),'trailing 12 months','good'],
-    ['Open POs',openPos,fmt$(openVal)+' on order · '+lateOpen+' past requested ship',lateOpen?'warn':''],
-    ['Statements on hold',holds.length,'of '+stmts.length+' — exceptions block payment',holds.length?'warn':'good'],
-  ].map(x=>`<div class="kpi ${x[3]}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+  const ms=sliceByPeriod(trend,'match_month','month');
+  const recCur=sumK(ms.cur,'variance_recovered'), recPrv=sumK(ms.prv,'variance_recovered');
+  paintKpis('m-kpis',[
+    {label:'Auto-clear rate', value:k.auto_clear_pct+'%', sub:'of matched lines need no human',
+      series:ms.spark.map(r=>+r.auto_clear_pct), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'pct', color:'#2E5BFF', axisL:'months', axisM:periodLabel(), axisR:''},
+    {label:'Open exceptions', value:k.open_exceptions, sub:fmt$(k.open_exception_amt)+' awaiting recovery', tone:'warn',
+      series:ms.spark.map(r=>+r.variance_open), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'money', color:'#C0392B', axisL:'months', axisM:'open $', axisR:''},
+    {label:'Variance recovered', value:fmt$(recCur||recovered), deltaPct:pctD(recCur, recPrv), tone:'good',
+      series:ms.spark.map(r=>+r.variance_recovered), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'money', color:'#1E9E5A', axisL:'months', axisM:periodLabel(), axisR:''},
+    {label:'Open POs', value:openPos, sub:fmt$(openVal)+' on order · '+lateOpen+' past requested ship', tone:lateOpen?'warn':'',
+      series:life.map(r=>+r.n), labels:life.map(r=>r.status+(r.past_requested_ship==='true'?' late':'')), fmt:'num', color:'#7C4DBE', axisL:'status', axisM:'POs', axisR:''},
+    {label:'Statements on hold', value:holds.length, sub:'of '+stmts.length+' — exceptions block payment', tone:holds.length?'warn':'good',
+      series:stmts.map(r=>+r.open_exception_amt), labels:stmts.map(r=>r.vendor_name), fmt:'money', color:'#C55A11', axisL:'statements', axisM:'open $', axisR:''},
+  ]);
   // ---- document explorer ----
   const tree=await runQ(`SELECT * FROM ${S}.po_document_tree_v`);
   const masters={};
@@ -1982,14 +2212,20 @@ async matchq(){
     const s=scoped();
     const n=st=>s.filter(p=>p.pile===st).length;
     const $=st=>s.filter(p=>p.pile===st).reduce((a,p)=>a+p.amt,0);
-    document.getElementById('mx-kpis').innerHTML=[
-      ['Open exceptions', fmtN(s.filter(p=>p.pile!=='Posted').length), fmt$(s.filter(p=>p.pile!=='Posted').reduce((a,p)=>a+p.amt,0))+' in play'],
-      ['Clear / accept', fmtN(n('Clear')), fmt$($('Clear')), n('Clear')?'good':''],
-      ['Debit / recover', fmtN(n('Debit')), fmt$($('Debit')), n('Debit')?'good':''],
-      ['Hold pay-file', fmtN(n('Hold')), fmt$($('Hold')), n('Hold')?'warn':''],
-      ['Need a teammate', fmtN(n('Review')+n('Assigned')), n('Assigned')+' already assigned', (n('Review')+n('Assigned'))?'warn':''],
-      ['Posted to NS', fmtN(n('Posted')), fmt$($('Posted')), n('Posted')?'good':''],
-    ].map(x=>`<div class="kpi ${x[3]||''}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+    paintKpis('mx-kpis',[
+      {label:'Open exceptions', value:fmtN(s.filter(p=>p.pile!=='Posted').length), sub:fmt$(s.filter(p=>p.pile!=='Posted').reduce((a,p)=>a+p.amt,0))+' in play',
+        series:s.map(p=>p.amt), labels:s.map(p=>p.po_id||p.id), fmt:'money', color:'#2E5BFF', axisL:'lines', axisM:'$', axisR:''},
+      {label:'Clear / accept', value:fmtN(n('Clear')), sub:fmt$($('Clear')), tone:n('Clear')?'good':'',
+        series:s.filter(p=>p.pile==='Clear').map(p=>p.amt).concat([0,0]), labels:s.filter(p=>p.pile==='Clear').map(p=>p.id).concat(['—','—']), fmt:'money', color:'#1E9E5A', axisL:'clear', axisM:'$', axisR:''},
+      {label:'Debit / recover', value:fmtN(n('Debit')), sub:fmt$($('Debit')), tone:n('Debit')?'good':'',
+        series:s.filter(p=>p.pile==='Debit').map(p=>p.amt).concat([0,0]), labels:s.filter(p=>p.pile==='Debit').map(p=>p.id).concat(['—','—']), fmt:'money', color:'#7C4DBE', axisL:'debit', axisM:'$', axisR:''},
+      {label:'Hold pay-file', value:fmtN(n('Hold')), sub:fmt$($('Hold')), tone:n('Hold')?'warn':'',
+        series:s.filter(p=>p.pile==='Hold').map(p=>p.amt).concat([0,0]), labels:s.filter(p=>p.pile==='Hold').map(p=>p.id).concat(['—','—']), fmt:'money', color:'#C55A11', axisL:'hold', axisM:'$', axisR:''},
+      {label:'Need a teammate', value:fmtN(n('Review')+n('Assigned')), sub:n('Assigned')+' already assigned', tone:(n('Review')+n('Assigned'))?'warn':'',
+        series:s.map(p=>(p.pile==='Review'||p.pile==='Assigned')?p.amt:0), labels:s.map(p=>p.id), fmt:'money', color:'#C0392B', axisL:'queue', axisM:'$', axisR:''},
+      {label:'Posted to NS', value:fmtN(n('Posted')), sub:fmt$($('Posted')), tone:n('Posted')?'good':'',
+        series:s.filter(p=>p.pile==='Posted').map(p=>p.amt).concat([0,0]), labels:s.filter(p=>p.pile==='Posted').map(p=>p.id).concat(['—','—']), fmt:'money', color:'#1B9E9E', axisL:'posted', axisM:'$', axisR:''},
+    ]);
   }
   function tabs(){
     const s=scoped();
@@ -2169,14 +2405,21 @@ async markdown(){
   const floorBreaches=ladder.filter(r=>r.below_floor==='true').length;
   const evtOverdue=evts.filter(r=>r.workflow_state==='OVERDUE - not staged').length;
   const taskOverdue=evts.reduce((a,r)=>a+ +r.tasks_overdue,0);
-  document.getElementById('md-kpis').innerHTML=[
-    ['Season sell-through', last.cum_sell_through_pct+'%', fmtN(last.cum_units)+' of est '+fmtN(last.est_season_supply)+' units', +last.cum_sell_through_pct>=60?'good':'warn'],
-    ['Active policies', pols.filter(p=>p.status==='Active').length, pols.filter(p=>p.status==='Testing').length+' in test (MD-004 delayed ladder)',''],
-    ['Sales since step 1', fmt$(mdSales), 'rainwear, 6/15 markdown onward',''],
-    ['Floor breaches in ladder', floorBreaches, 'deep steps priced below policy floor', floorBreaches?'warn':'good'],
-    ['Events needing action', evtOverdue, 'markdown steps scheduled, not staged', evtOverdue?'bad':'good'],
-    ['Label tasks overdue', taskOverdue, 'across markdown events', taskOverdue?'bad':'good'],
-  ].map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  const seas=sliceByPeriod(season,'week_start','week');
+  paintKpis('md-kpis',[
+    {label:'Season sell-through', value:last.cum_sell_through_pct+'%', sub:fmtN(last.cum_units)+' of est '+fmtN(last.est_season_supply)+' units', tone:+last.cum_sell_through_pct>=60?'good':'warn',
+      series:seas.spark.map(r=>+r.cum_sell_through_pct), labels:seas.spark.map(r=>mmd(r.week_start)), fmt:'pct', color:'#2E5BFF', axisL:'season', axisM:periodLabel(), axisR:''},
+    {label:'Active policies', value:pols.filter(p=>p.status==='Active').length, sub:pols.filter(p=>p.status==='Testing').length+' in test (MD-004 delayed ladder)',
+      series:pols.map(()=>1), labels:pols.map(p=>p.policy_id), fmt:'num', color:'#7C4DBE', axisL:'policies', axisM:'count', axisR:''},
+    {label:'Sales since step 1', value:fmt$(mdSales), sub:'rainwear, 6/15 markdown onward',
+      series:seas.spark.map(r=>+r.net_sales), labels:seas.spark.map(r=>mmd(r.week_start)), fmt:'money', color:'#1E9E5A', axisL:'weeks', axisM:periodLabel(), axisR:''},
+    {label:'Floor breaches in ladder', value:floorBreaches, sub:'deep steps priced below policy floor', tone:floorBreaches?'warn':'good',
+      series:ladder.map(r=>+r.step_margin_pct), labels:ladder.map(r=>(r.brand||'')+' '+(r.step_label||'')), fmt:'pct', color:'#C55A11', axisL:'steps', axisM:'margin %', axisR:''},
+    {label:'Events needing action', value:evtOverdue, sub:'markdown steps scheduled, not staged', tone:evtOverdue?'bad':'good',
+      series:evts.map(r=>r.workflow_state==='OVERDUE - not staged'?1:0).concat([0,0]), labels:evts.map(r=>r.event_id).concat(['—','—']), fmt:'num', color:'#C0392B', axisL:'events', axisM:'overdue', axisR:''},
+    {label:'Label tasks overdue', value:taskOverdue, sub:'across markdown events', tone:taskOverdue?'bad':'good',
+      series:evts.map(r=>+r.tasks_overdue).concat([0,0]), labels:evts.map(r=>r.event_id).concat(['—','—']), fmt:'num', color:'#C0392B', axisL:'events', axisM:'tasks', axisR:''},
+  ]);
   // season chart
   const labels=season.map(r=>String(r.week_start).slice(0,10));
   const stepPts=season.map(r=>r.markdown_step? +r.cum_sell_through_pct : null);
@@ -2255,14 +2498,20 @@ async pricing(){
   const annDelta=impact.reduce((a,r)=>a+ +r.annual_margin_delta,0);
   const pb=await runQ(`SELECT * FROM ${S}.prebuy_analysis_v ORDER BY prebuy_savings DESC`);
   const pbSav=pb.reduce((a,r)=>a+ +r.prebuy_savings,0), pbCash=pb.reduce((a,r)=>a+ +r.prebuy_cash_outlay,0);
-  document.getElementById('pr-kpis').innerHTML=[
-    ['Events in pipeline',pipe.length, upcoming.length+' upcoming · '+overdue.length+' overdue', overdue.length?'warn':''],
-    ['Next effective', upcoming.length?String(upcoming[0].effective_date).slice(0,10):'—', upcoming.length?('in '+upcoming[0].days_to_effective+'d — '+upcoming[0].vendor_name):'', ''],
-    ['SKUs touched', pipe.reduce((a,r)=>a+ +r.skus_affected,0), 'across all pipeline events', ''],
-    ['Margin delta (8/1 staged)', fmt$(annDelta)+'/yr', 'retail +10% vs cost +5.5%', annDelta>0?'good':'bad'],
-    ['Pre-buy on the table', fmt$(pbSav), 'on '+fmt$(pbCash)+' outlay · 6-wk guardrail', 'good'],
-    ['Store tasks overdue', tOver, 'from price events', tOver?'bad':'good'],
-  ].map(k=>`<div class="kpi ${k[3]}"><div class="lbl">${k[0]}</div><div class="val">${k[1]}</div><div class="sub">${k[2]}</div></div>`).join('');
+  paintKpis('pr-kpis',[
+    {label:'Events in pipeline', value:pipe.length, sub:upcoming.length+' upcoming · '+overdue.length+' overdue', tone:overdue.length?'warn':'',
+      series:pipe.map(r=>+r.skus_affected), labels:pipe.map(r=>r.event_id), fmt:'num', color:'#2E5BFF', axisL:'events', axisM:'SKUs', axisR:''},
+    {label:'Next effective', value:upcoming.length?String(upcoming[0].effective_date).slice(0,10):'—', sub:upcoming.length?('in '+upcoming[0].days_to_effective+'d — '+upcoming[0].vendor_name):'',
+      series:upcoming.map(r=>+r.days_to_effective).concat([0,0]), labels:upcoming.map(r=>r.event_id).concat(['—','—']), fmt:'num', color:'#7C4DBE', axisL:'upcoming', axisM:'days', axisR:''},
+    {label:'SKUs touched', value:pipe.reduce((a,r)=>a+ +r.skus_affected,0), sub:'across all pipeline events',
+      series:pipe.map(r=>+r.skus_affected), labels:pipe.map(r=>r.vendor_name), fmt:'num', color:'#1B9E9E', axisL:'events', axisM:'SKUs', axisR:''},
+    {label:'Margin delta (8/1 staged)', value:fmt$(annDelta)+'/yr', sub:'retail +10% vs cost +5.5%', tone:annDelta>0?'good':'bad',
+      series:impact.map(r=>+r.annual_margin_delta), labels:impact.map(r=>r.style_name), fmt:'money', color:'#1E9E5A', axisL:'styles', axisM:'$/yr', axisR:''},
+    {label:'Pre-buy on the table', value:fmt$(pbSav), sub:'on '+fmt$(pbCash)+' outlay · 6-wk guardrail', tone:'good',
+      series:pb.map(r=>+r.prebuy_savings), labels:pb.map(r=>r.style_name), fmt:'money', color:'#C55A11', axisL:'styles', axisM:'savings', axisR:''},
+    {label:'Store tasks overdue', value:tOver, sub:'from price events', tone:tOver?'bad':'good',
+      series:pipe.map(r=>+r.tasks_overdue), labels:pipe.map(r=>r.event_id), fmt:'num', color:'#C0392B', axisL:'events', axisM:'overdue', axisR:''},
+  ]);
   const wfChip=s=>({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[s]||'gray';
   document.getElementById('pr-pipe').innerHTML='<h3>Price &amp; promo event pipeline</h3><div class="hint">Announced → staged → ERP updated → stores notified → labels printed. Task rollup shows store execution.</div>'+table(pipe,[
     {h:'Event',f:r=>`<span class="mono" style="font-size:11px">${esc(r.event_id)}</span>`},
@@ -2334,14 +2583,368 @@ async pricing(){
 },
 async comms(){
   const s=await runQ(`SELECT status, count(*) n FROM ${S}.task_board_v GROUP BY 1 ORDER BY n DESC`);
-  document.getElementById('c-kpis').innerHTML=s.map(r=>`<div class="kpi ${r.status==='Overdue'?'bad':''}"><div class="lbl">${esc(r.status)}</div><div class="val">${fmtN(r.n)}</div><div class="sub">store tasks</div></div>`).join('');
+  const all=await runQ(`SELECT store_id, status, days_past_due FROM ${S}.task_board_v`);
+  const pipe=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v ORDER BY effective_date`);
+  const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
+  const overdue=all.filter(r=>r.status==='Overdue');
+  paintKpis('c-kpis',[
+    {label:'Open tasks', value:fmtN(kpi.open_tasks), sub:kpi.overdue_tasks+' overdue', tone:+kpi.overdue_tasks?'warn':'good',
+      series:s.map(r=>+r.n), labels:s.map(r=>r.status), fmt:'num', color:'#2E5BFF', axisL:'status', axisM:'tasks', axisR:''},
+    {label:'Overdue (escalate)', value:fmtN(overdue.length), sub:'district manager path', tone:overdue.length?'bad':'good',
+      series:overdue.map(r=>+r.days_past_due).concat([0,0]), labels:overdue.map(r=>r.store_id).concat(['—','—']), fmt:'num', color:'#C0392B', axisL:'stores', axisM:'days past due', axisR:''},
+    {label:'Price/promo comms', value:fmtN(pipe.filter(r=>r.comm_status==='Sent').length), sub:pipe.filter(r=>r.comm_status==='Not drafted').length+' not drafted',
+      series:pipe.map(r=>r.comm_status==='Sent'?1:0), labels:pipe.map(r=>r.event_id), fmt:'num', color:'#1E9E5A', axisL:'events', axisM:'sent', axisR:''},
+    {label:'Alert workflows', value:'6', sub:'live rules on Alerting',
+      series:[4,5,6,5,6,6], labels:['Jan','Feb','Mar','Apr','May','Jun'], fmt:'num', color:'#7C4DBE', axisL:'catalog', axisM:'rules', axisR:''},
+    {label:'Board pack', value:'Draft', sub:'July leadership pack not sent',
+      series:[1,1,1,1,1,0], labels:['Feb','Mar','Apr','May','Jun','Jul'], fmt:'num', color:'#C55A11', axisL:'months', axisM:'sent=1', axisR:''},
+  ]);
+  document.getElementById('c-comms').innerHTML='<h3>Typed communications — from price &amp; markdown events</h3><div class="hint">LLM-drafted, human-approved, routed with the event. Empty subject means the digest has not been written yet — that is the Alerting → Communications handoff.</div>'+table(pipe.slice(0,12),[
+    {h:'Event',f:r=>`<span class="mono" style="font-size:11px">${esc(r.event_id)}</span>`},
+    {h:'Type',f:r=>`<span class="chip ${({VendorIncrease:'orange',Markdown:'purple',PromoStart:'blue',PromoEnd:'gray'})[r.event_type]||'gray'}">${esc(r.event_type)}</span>`},
+    {h:'Audience',f:r=>esc(r.scope)},
+    {h:'Subject',f:r=>esc(r.comm_subject||'— not drafted')},
+    {h:'Comm',f:r=>`<span class="chip ${r.comm_status==='Sent'?'green':r.comm_status==='Not drafted'?'gray':'orange'}">${esc(r.comm_status)}</span>`},
+    {h:'Store tasks',f:r=>+r.tasks_total?`${r.tasks_done}/${r.tasks_total}`+(+r.tasks_overdue?` · <span style="color:var(--red);font-weight:700">${r.tasks_overdue} overdue</span>`:''):'—'}]);
   const rows=await runQ(`SELECT * FROM ${S}.task_board_v WHERE status <> 'Done' ORDER BY CASE status WHEN 'Overdue' THEN 0 ELSE 1 END, due_date LIMIT 30`);
-  document.getElementById('c-tbl').innerHTML='<h3>Open task board</h3><div class="hint">Overdue tasks escalate to the district manager — same alert pattern as the labor module.</div>'+table(rows,[
+  document.getElementById('c-tbl').innerHTML='<h3>Open task board</h3><div class="hint">Overdue tasks escalate to the district manager — same pattern Alerting uses when sensitivity is Escalate. Work the rule on <a href="#" onclick="show(\'calert\');return false">Alerting</a>.</div>'+table(rows,[
     {h:'Store',f:r=>`<b>${esc(r.store_id)}</b><br><span style="color:var(--sub)">${esc(r.store_name)}</span>`},
     {h:'Type',f:r=>`<span class="chip blue">${esc(r.task_type)}</span>`},
     {h:'Task',k:'title'},
     {h:'Due',f:r=>String(r.due_date).slice(0,10)},
     {h:'Status',f:r=>statusChip(r.status)}]);
+},
+async calert(){
+  const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
+  const replen=await runQ(`SELECT * FROM ${S}.replen_queue_v`);
+  const exc=await runQ(`SELECT * FROM ${S}.exception_queue_v`);
+  const pipe=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v`);
+  const ladder=await runQ(`SELECT * FROM ${S}.markdown_ladder_v`);
+  const ats=await runQ(`SELECT * FROM ${S}.ats_coverage_v`);
+  const tasks=await runQ(`SELECT * FROM ${S}.task_board_v WHERE status <> 'Done'`);
+  const TEAM=[
+    {id:'store', name:'Store ops', role:'checklist + tablet'},
+    {id:'dm', name:'District manager', role:'escalation'},
+    {id:'merch', name:'Merch director', role:'sensitivity owner'},
+    {id:'ap', name:'AP / close', role:'3-way exceptions'},
+    {id:'buyer', name:'Buyer', role:'replen & deals'},
+    {id:'price', name:'Pricing ops', role:'file staging'},
+  ];
+  const CH=['Email','SMS','Slack / Teams','In-app','Store tablet'];
+  const WFS=[
+    {id:'meat', label:'Meat-size break', wf:'Replenishment', owner:'buyer',
+      blurb:'Core sizes out. Transfer-first before a buy.',
+      tripLabel:'Min meat-size breaks to fire', trip:1, tripMax:8, band:'act', live:true,
+      eval:(t,band)=>{
+        const rows=replen.filter(r=>/meat/i.test(r.reason||'')||/meat/i.test(r.tier_break_note||'')||r.action==='ExpediteCheck');
+        const n=Math.max(rows.length, +kpi.meat_outs||0);
+        const fire= band==='quiet'? n>=Math.max(t,3): n>=t;
+        return {n, fire, sample:rows.slice(0,8).map(r=>({k:r.store_id+' '+r.brand, v:r.days_to_stockout+'d', extra:r.action}))};
+      }},
+    {id:'stock', label:'Projected stockout', wf:'Replenishment', owner:'buyer',
+      blurb:'Days-to-stockout tripwire on the suggestion queue.',
+      tripLabel:'Fire when days to stockout ≤', trip:7, tripMax:21, band:'watch', live:true,
+      eval:(t,band)=>{
+        const cut=band==='quiet'?Math.min(t,3):t;
+        const rows=replen.filter(r=>+r.days_to_stockout<=cut);
+        return {n:rows.length, fire:rows.length>0, sample:rows.slice(0,8).map(r=>({k:r.store_id+' '+(r.style_name||'').slice(0,18), v:r.days_to_stockout+'d', extra:r.action}))};
+      }},
+    {id:'exc', label:'Aged 3-way exception', wf:'Operations close', owner:'ap',
+      blurb:'Open match $ and age. Loudness is what keeps the statement off the pay file.',
+      tripLabel:'Fire when age (days) ≥', trip:14, tripMax:45, band:'act', live:true,
+      eval:(t,band)=>{
+        const minA=band==='quiet'?Math.max(t,21):t;
+        const min$=band==='escalate'?250:50;
+        const rows=exc.filter(r=>+r.age_days>=minA && +r.variance_amount>=min$);
+        return {n:rows.length, fire:rows.length>0, sample:rows.slice(0,8).map(r=>({k:r.vendor_name.split(' ')[0]+' '+r.po_id, v:fmt$(r.variance_amount), extra:r.age_days+'d'}))};
+      }},
+    {id:'price', label:'Price event not staged', wf:'Pricing & markdowns', owner:'price',
+      blurb:'Effective date approaching, ERP still not updated.',
+      tripLabel:'Fire when days to effective ≤', trip:10, tripMax:30, band:'act', live:true,
+      eval:(t,band)=>{
+        const rows=pipe.filter(r=>r.workflow_state==='OVERDUE - not staged' || (+r.days_to_effective>0 && +r.days_to_effective<=t && r.erp_updated!=='true'));
+        const fire=band==='quiet'? rows.length>=3: rows.length>0;
+        return {n:rows.length, fire, sample:rows.slice(0,8).map(r=>({k:r.event_id, v:(r.days_to_effective)+'d', extra:r.vendor_name}))};
+      }},
+    {id:'floor', label:'Markdown floor breach', wf:'Pricing & markdowns', owner:'merch',
+      blurb:'Ladder step priced below policy floor.',
+      tripLabel:'Fire when below-floor steps ≥', trip:1, tripMax:12, band:'watch', live:true,
+      eval:(t)=>{
+        const rows=ladder.filter(r=>r.below_floor==='true');
+        return {n:rows.length, fire:rows.length>=t, sample:rows.slice(0,8).map(r=>({k:(r.brand||'')+' '+(r.step_label||''), v:Number(r.step_margin_pct).toFixed(1)+'%', extra:'floor '+r.floor_margin_pct}))};
+      }},
+    {id:'ats', label:'ATS coverage hole', wf:'Vendor ATS', owner:'buyer',
+      blurb:'Vendor items we cannot match, or match rate under the tripwire.',
+      tripLabel:'Fire when match rate % ≤', trip:85, tripMax:100, band:'watch', live:true,
+      eval:(t)=>{
+        const rows=ats.filter(r=>+r.match_rate_pct<=t || +r.zero_ats_items>0);
+        return {n:rows.length, fire:rows.length>0, sample:rows.slice(0,8).map(r=>({k:r.vendor_name, v:r.match_rate_pct+'%', extra:r.zero_ats_items+' zero ATS'}))};
+      }},
+  ];
+  WFS.forEach(w=>{ w.audience=w.owner; w.channel='In-app'; w.mode='Instant'; w.quiet=true; });
+  let cur=WFS[0].id;
+  let audit=[];
+  function wf(){ return WFS.find(w=>w.id===cur); }
+  function paintK(){
+    const live=WFS.filter(w=>w.live).length;
+    const paused=WFS.length-live;
+    const scores=WFS.map(w=>w.eval(w.trip,w.band));
+    const firing=scores.filter(s=>s.fire).length;
+    paintKpis('al-kpis',[
+      {label:'Rules in catalog', value:fmtN(WFS.length), sub:live+' live · '+paused+' paused',
+        series:WFS.map(w=>w.live?1:0), labels:WFS.map(w=>w.label), fmt:'num', color:'#2E5BFF', axisL:'rules', axisM:'live=1', axisR:''},
+      {label:'Would fire now', value:fmtN(firing), sub:'at current sensitivity', tone:firing?'warn':'good',
+        series:scores.map(s=>s.n), labels:WFS.map(w=>w.label), fmt:'num', color:'#C55A11', axisL:'rules', axisM:'hits', axisR:''},
+      {label:'Open tasks (escalate path)', value:fmtN(tasks.filter(r=>r.status==='Overdue').length), sub:'of '+fmtN(tasks.length)+' open',
+        series:tasks.map(r=>+r.days_past_due||0), labels:tasks.map(r=>r.store_id), fmt:'num', color:'#C0392B', axisL:'tasks', axisM:'days past due', axisR:''},
+      {label:'Meat outs / exceptions', value:fmtN(kpi.meat_outs)+' / '+fmtN(kpi.open_exceptions), sub:fmt$(kpi.open_exception_amt)+' parked',
+        series:[+kpi.meat_outs,+kpi.open_exceptions,+kpi.overdue_tasks,+kpi.replen_suggestions], labels:['Meat','3-way','Tasks','Replen'], fmt:'num', color:'#7C4DBE', axisL:'queues', axisM:'counts', axisR:''},
+    ]);
+  }
+  function paintWf(){
+    document.getElementById('al-wfs').innerHTML=WFS.map(w=>`
+      <label class="pg-rule"><input type="radio" name="al-wf" value="${w.id}" ${w.id===cur?'checked':''}>
+        <span><b>${esc(w.label)}</b> ${statusChip(w.live?'Live':'Paused')} ${statusChip(w.band[0].toUpperCase()+w.band.slice(1))}
+        <br><span class="why">${esc(w.wf)} · ${esc(w.blurb)}</span></span></label>`).join('');
+    document.querySelectorAll('input[name="al-wf"]').forEach(i=>i.onchange=()=>{ cur=i.value; paintSens(); paintDist(); paintWf(); });
+  }
+  function paintSens(){
+    const w=wf();
+    const bands=['quiet','watch','act','escalate'];
+    document.getElementById('al-sens-hint').textContent=w.blurb+' Owner: '+(TEAM.find(t=>t.id===w.owner)||{}).name+'.';
+    document.getElementById('al-bands').innerHTML=bands.map(b=>`<button type="button" data-b="${b}" class="${w.band===b?'active':''}">${b[0].toUpperCase()+b.slice(1)}</button>`).join('');
+    document.querySelectorAll('#al-bands button').forEach(b=>b.onclick=()=>{ w.band=b.dataset.b; paintSens(); paintWf(); paintK(); });
+    document.getElementById('al-sens-controls').innerHTML=`
+      <div style="flex:1;min-width:220px"><label>${esc(w.tripLabel)} <b id="al-trip-val">${w.trip}</b></label>
+        <input id="al-trip" type="range" min="1" max="${w.tripMax}" value="${w.trip}" style="width:100%"></div>`;
+    document.getElementById('al-trip').oninput=e=>{ w.trip=+e.target.value; document.getElementById('al-trip-val').textContent=w.trip; };
+    document.getElementById('al-toggle').textContent=w.live?'Pause rule':'Resume rule';
+    document.getElementById('al-hit').innerHTML='<div class="hint" style="margin:0">Test fire to score this rule against the warehouse.</div>';
+  }
+  function paintDist(){
+    const w=wf();
+    document.getElementById('al-dist-controls').innerHTML=`
+      <div><label>Audience</label><select id="al-who">${TEAM.map(t=>`<option value="${t.id}" ${w.audience===t.id?'selected':''}>${esc(t.name)} — ${esc(t.role)}</option>`).join('')}</select></div>
+      <div><label>Channel</label><select id="al-ch">${CH.map(c=>`<option ${w.channel===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div><label>Cadence</label><select id="al-mode"><option ${w.mode==='Instant'?'selected':''}>Instant</option><option ${w.mode==='Digest'?'selected':''}>Digest (morning pack)</option></select></div>
+      <div><label>Quiet hours</label><select id="al-q"><option value="1" ${w.quiet?'selected':''}>21:00–07:00 store local</option><option value="0" ${!w.quiet?'selected':''}>Always on</option></select></div>`;
+    const bind=()=>{
+      w.audience=document.getElementById('al-who').value;
+      w.channel=document.getElementById('al-ch').value;
+      w.mode=document.getElementById('al-mode').value.startsWith('Digest')?'Digest':'Instant';
+      w.quiet=document.getElementById('al-q').value==='1';
+      const who=TEAM.find(t=>t.id===w.audience);
+      document.getElementById('al-dist-note').innerHTML=`${statusChip(w.mode)} to <b>${esc(who.name)}</b> via ${esc(w.channel)}.
+        ${w.quiet?'Quiet hours mute Instant fires overnight — they land on the morning digest.':'Always-on: nights page the on-call.'}`;
+    };
+    ['al-who','al-ch','al-mode','al-q'].forEach(id=>document.getElementById(id).onchange=bind);
+    bind();
+  }
+  function renderAudit(){
+    if(!audit.length){ document.getElementById('al-audit').innerHTML='<div class="loading">{ TEST FIRE TO POPULATE }</div>'; return; }
+    document.getElementById('al-audit').innerHTML=table(audit,[
+      {h:'When',f:r=>esc(r.when)},
+      {h:'Rule',f:r=>`<b>${esc(r.rule)}</b><br><span style="color:var(--sub)">${esc(r.wf)}</span>`},
+      {h:'Band',f:r=>statusChip(r.band)},
+      {h:'Hits',f:r=>fmtN(r.n),num:1},
+      {h:'Audience',k:'who'},
+      {h:'Channel',k:'channel'},
+      {h:'Result',f:r=>statusChip(r.result)},
+    ]);
+  }
+  document.getElementById('al-test').onclick=()=>{
+    const w=wf();
+    const hit=w.eval(w.trip, w.band);
+    const result=!w.live||!hit.fire?'Muted': (w.quiet && w.mode==='Instant' && w.band!=='escalate')?'Muted':'Fired';
+    document.getElementById('al-hit').innerHTML= hit.fire
+      ? `<div class="hint" style="margin:0 0 8px">${fmtN(hit.n)} hits at ${w.band} / trip ${w.trip}. Result: ${result}.</div>`+
+        (hit.sample.length? table(hit.sample,[{h:'Where',k:'k'},{h:'Signal',k:'v'},{h:'Detail',k:'extra'}]):'')
+      : `<div class="hint" style="margin:0">No hits at this sensitivity. Loosen the tripwire or drop to Watch if you expected noise.</div>`;
+    audit.unshift({when:ANCHOR+' 08:12', rule:w.label, wf:w.wf, band:w.band[0].toUpperCase()+w.band.slice(1), n:hit.n,
+      who:(TEAM.find(t=>t.id===w.audience)||{}).name, channel:w.channel, result:result==='Fired'?'Delivered':result});
+    audit=audit.slice(0,14);
+    document.getElementById('al-sens-msg').textContent=w.live? (hit.fire?'Would page at this setting.':'Would stay quiet.'):'Rule is paused — logged as Muted.';
+    renderAudit(); paintK();
+  };
+  document.getElementById('al-toggle').onclick=()=>{
+    const w=wf(); w.live=!w.live;
+    document.getElementById('al-sens-msg').textContent=w.live?'Rule is live (session only).':'Paused — Test fire will mute.';
+    paintWf(); paintSens(); paintK();
+  };
+  paintK(); paintWf(); paintSens(); paintDist(); renderAudit();
+},
+async cpack(){
+  const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
+  let tr=await runQ(`SELECT * FROM ${S}.sales_trend_v ORDER BY week_start`);
+  if(tr.length>3){
+    const med=[...tr].map(r=>+r.net_sales).sort((a,b)=>a-b)[Math.floor(tr.length/2)];
+    if(+tr[tr.length-1].net_sales < med*0.4) tr=tr.slice(0,-1);
+  }
+  const sl=sliceByPeriod(tr,'week_start','week');
+  const trend=await runQ(`SELECT * FROM ${S}.match_trend_v ORDER BY match_month`);
+  const ms=sliceByPeriod(trend,'match_month','month');
+  const replen=await runQ(`SELECT * FROM ${S}.replen_queue_v ORDER BY days_to_stockout LIMIT 12`);
+  const AUDS=[
+    {id:'lead', label:'Merchandising leadership', blurb:'Network scorecard, open items, recovery. The exec meeting pack.'},
+    {id:'dm', label:'District managers', blurb:'Stores under plan, meat breaks, overdue tasks in the district.'},
+    {id:'store', label:'Store managers', blurb:'This week\'s checklist, price/markdown events, what to print.'},
+  ];
+  const SECS={
+    lead:[{id:'score',label:'Network scorecard',on:true},{id:'attn',label:'Open-item list',on:true},{id:'margin',label:'Margin & promo',on:true},{id:'close',label:'3-way recovery',on:true},{id:'wx',label:'Weather window (4–10d)',on:false}],
+    dm:[{id:'score',label:'District vs network',on:true},{id:'stores',label:'Weakest stores',on:true},{id:'meat',label:'Meat-size breaks',on:true},{id:'tasks',label:'Overdue store tasks',on:true},{id:'replen',label:'Replen suggestions',on:true}],
+    store:[{id:'tasks',label:'My open tasks',on:true},{id:'price',label:'Price / markdown events',on:true},{id:'labels',label:'Label files this week',on:true},{id:'score',label:'Store vs plan (8 wks)',on:false}],
+  };
+  let aud='lead';
+  let pack=null, sent=false, exportMethod=null;
+  const cS=sumK(sl.cur,'net_sales'), pS=sumK(sl.prv,'net_sales');
+  const cM=sumK(sl.cur,'margin_dollars');
+  const ax=axisFrom(sl.spark,'week_start');
+  paintKpis('pk-kpis',[
+    {label:'Period sales', value:fmt$(cS), deltaPct:pctD(cS,pS), series:sl.spark.map(r=>+r.net_sales),
+      labels:sl.spark.map(r=>mmd(r.week_start)), fmt:'money', color:'#2E5BFF', axisL:ax.axisL, axisM:periodLabel(), axisR:ax.axisR},
+    {label:'Margin $', value:fmt$(cM), series:sl.spark.map(r=>+r.margin_dollars),
+      labels:sl.spark.map(r=>mmd(r.week_start)), fmt:'money', color:'#1E9E5A', axisL:'weeks', axisM:periodLabel(), axisR:''},
+    {label:'Open exceptions', value:fmtN(kpi.open_exceptions), sub:fmt$(kpi.open_exception_amt), tone:+kpi.open_exceptions?'warn':'',
+      series:ms.spark.map(r=>+r.variance_open), labels:ms.spark.map(r=>String(r.match_month).slice(0,7)), fmt:'money', color:'#C0392B', axisL:'months', axisM:'open $', axisR:''},
+    {label:'Pack status', value:sent?'Sent':'Draft', sub:periodLabel()+' · '+(AUDS.find(a=>a.id===aud)||{}).label,
+      series:[1,1,1,1,1,sent?1:0], labels:['Feb','Mar','Apr','May','Jun','Jul'], fmt:'num', color:'#7C4DBE', axisL:'months', axisM:'sent=1', axisR:''},
+  ]);
+  function paintAud(){
+    document.getElementById('pk-aud').innerHTML=AUDS.map(a=>`<button data-a="${a.id}" class="${aud===a.id?'active':''}">${a.label}</button>`).join('');
+    document.querySelectorAll('#pk-aud button').forEach(b=>b.onclick=()=>{ aud=b.dataset.a; pack=null; paintAud(); paintSecs(); preview(); });
+  }
+  function paintSecs(){
+    const list=SECS[aud];
+    document.getElementById('pk-secs').innerHTML=list.map(s=>`
+      <label class="pg-rule"><input type="checkbox" data-s="${s.id}" ${s.on?'checked':''}>
+        <span><b>${esc(s.label)}</b><br><span class="why">${esc((AUDS.find(a=>a.id===aud)||{}).blurb)}</span></span></label>`).join('');
+    document.querySelectorAll('#pk-secs input').forEach(i=>i.onchange=()=>{ list.find(s=>s.id===i.dataset.s).on=i.checked; });
+  }
+  function selected(){ return SECS[aud].filter(s=>s.on).map(s=>s.label); }
+  function briefFallback(){
+    const who=AUDS.find(a=>a.id===aud);
+    const gm=cS? (100*cM/cS).toFixed(1):kpi.margin_pct;
+    const dlt=pctD(cS,pS);
+    const nxt=aud==='lead'? `1. Close aged 3-way dollars before the pay file.\n2. Decide replen vs transfer on meat breaks.\n3. Send this pack; do not rebuild the slides.`:
+      aud==='dm'? `1. Call stores with meat-size breaks today.\n2. Clear overdue tasks or reassign.\n3. Confirm transfers before a vendor expedite.`:
+      `1. Print labels / complete overdue tasks.\n2. Confirm the price event on the floor.\n3. Reply in the tablet checklist — that closes the alert.`;
+    return [
+      `# Work World — ${who.label} pack`,
+      `Period: ${periodLabel()} · Anchor ${ANCHOR} · Generated from sset1000.supplychain`,
+      ``, `## Scorecard`,
+      `- Net sales ${fmt$(cS)} (${dlt==null?'no prior': (dlt>0?'+':'')+dlt.toFixed(1)+'% vs prior'})`,
+      `- Gross margin $ ${fmt$(cM)} · ${gm}%`,
+      `- In-stock ${kpi.in_stock_pct}% · meat-size breaks ${kpi.meat_outs} · replen suggestions ${kpi.replen_suggestions}`,
+      `- 3-way auto-clear ${kpi.auto_clear_pct}% · ${kpi.open_exceptions} open exceptions (${fmt$(kpi.open_exception_amt)})`,
+      `- Store tasks ${kpi.open_tasks} open · ${kpi.overdue_tasks} overdue`,
+      ``, `## Included sections`,
+      ...selected().map(s=>`- ${s}`),
+      ``, `## Attention`,
+      `- Exception triage: ${kpi.open_exceptions} lines still blocking statements.`,
+      `- Replenishment: ${replen.length? replen[0].store_id+' '+replen[0].brand+' in '+replen[0].days_to_stockout+'d': 'queue empty'}.`,
+      `- Communications: ${kpi.overdue_tasks} overdue store tasks escalate to district.`,
+      ``, `## Next steps`, nxt, ``,
+      `_This pack is a demo file. It does not post to email, Teams, or SharePoint until you download it._`
+    ].join('\n');
+  }
+  function preview(){
+    if(!pack){ document.getElementById('pk-preview').innerHTML='<div class="loading" style="padding:16px">{ GENERATE TO PREVIEW }</div>'; return; }
+    const html=pack.split('\n').map(l=>{
+      if(l.startsWith('# ')) return `<h3 style="margin:0 0 8px">${esc(l.slice(2))}</h3>`;
+      if(l.startsWith('## ')) return `<h4 style="margin:14px 0 6px;color:var(--navy)">${esc(l.slice(3))}</h4>`;
+      if(l.startsWith('- ')) return `<li>${esc(l.slice(2))}</li>`;
+      if(/^\d+\. /.test(l)) return `<li>${esc(l.replace(/^\d+\. /,''))}</li>`;
+      if(l.startsWith('_')) return `<p class="hint">${esc(l.replace(/_/g,''))}</p>`;
+      if(!l.trim()) return '';
+      return `<p>${esc(l)}</p>`;
+    }).join('');
+    document.getElementById('pk-preview').innerHTML=`<div class="pack-body">${html}</div>`;
+  }
+  const EXPORTS=[
+    {id:'md', tag:'Brief', title:'Markdown pack', blurb:'The generated brief as .md — paste into the board book or Confluence.', file:'WW_board_pack.md'},
+    {id:'html', tag:'Email', title:'HTML email digest', blurb:'Same brief, email-ready. Distro is the audience list, not bcc-all.', file:'WW_board_pack.html'},
+    {id:'csv', tag:'Scorecard', title:'Scorecard CSV', blurb:'The KPI strip as a file finance can drop in the pack appendix.', file:'WW_board_scorecard.csv'},
+    {id:'teams', tag:'Teams', title:'Teams / Slack post', blurb:'Short form of the attention list. Deep links stay in the app.', file:'WW_board_teams.txt'},
+    {id:'sp', tag:'SharePoint', title:'SharePoint / File Cabinet', blurb:'Drop the brief in the monthly folder. Versioned by period.', file:'WW_board_pack.md'},
+  ];
+  function payload(m){
+    const src=pack||briefFallback();
+    if(m.id==='csv'){
+      return ['metric,value,period',
+        `net_sales,${cS},${periodLabel()}`,`margin_dollars,${cM},${periodLabel()}`,
+        `in_stock_pct,${kpi.in_stock_pct},snapshot`,`meat_outs,${kpi.meat_outs},snapshot`,
+        `open_exceptions,${kpi.open_exceptions},snapshot`,`open_exception_amt,${kpi.open_exception_amt},snapshot`,
+        `open_tasks,${kpi.open_tasks},snapshot`,`overdue_tasks,${kpi.overdue_tasks},snapshot`].join('\n');
+    }
+    if(m.id==='html') return `<html><body style="font-family:Segoe UI,Arial;color:#1c2333"><pre style="white-space:pre-wrap;font-family:inherit">${esc(src)}</pre></body></html>`;
+    if(m.id==='teams') return src.split('\n').filter(l=>l.startsWith('- ')||l.startsWith('#')||/^\d+\./.test(l)).join('\n');
+    return src;
+  }
+  function drawExport(){
+    document.getElementById('pk-export-grid').innerHTML=EXPORTS.map(m=>`
+      <button class="export-card ${exportMethod===m.id?'on':''}" data-x="${m.id}">
+        <div class="xtag">${esc(m.tag)}</div><h4>${esc(m.title)}</h4><p>${esc(m.blurb)}</p>
+      </button>`).join('')+
+      `<div class="export-card muted"><div class="xtag">${sent?'Sent':'Draft'}</div><h4>${esc((AUDS.find(a=>a.id===aud)||{}).label)}</h4>
+        <p>${periodLabel()}. Generate the pack before you pick a path — empty packs do not go on the calendar.</p></div>`;
+    document.querySelectorAll('#pk-export-grid .export-card[data-x]').forEach(b=>b.onclick=()=>{
+      exportMethod=b.dataset.x; previewExport();
+      document.querySelectorAll('#pk-export-grid .export-card').forEach(x=>x.classList.toggle('on',x.dataset.x===exportMethod));
+    });
+  }
+  function previewExport(){
+    const m=EXPORTS.find(x=>x.id===exportMethod); if(!m) return;
+    const body=payload(m);
+    document.getElementById('pk-export-preview').innerHTML=`
+      <div class="export-preview">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <b>${esc(m.title)}</b>
+          ${statusChip(sent?'Published':'Draft')}
+          <button class="btn" id="pk-dl">Download ${esc(m.file)}</button>
+          <button class="btn ghost" id="pk-mark">Mark pack as sent</button>
+          <span id="pk-xmsg" style="font-size:12px;color:var(--sub)"></span>
+        </div>
+        <pre class="sqlbox" style="display:block;max-height:220px;overflow:auto">${esc(body.slice(0,4000))}${body.length>4000?'\n…':''}</pre>
+      </div>`;
+    document.getElementById('pk-dl').onclick=()=>{
+      if(!pack){ document.getElementById('pk-xmsg').textContent='Generate the pack first.'; return; }
+      try{
+        const blob=new Blob([body],{type:'text/plain'}); const a=document.createElement('a');
+        a.href=URL.createObjectURL(blob); a.download=m.file; a.click();
+        document.getElementById('pk-xmsg').textContent='Downloaded — demo file only.';
+      }catch(e){ document.getElementById('pk-xmsg').textContent='Download blocked in this view.'; }
+    };
+    document.getElementById('pk-mark').onclick=()=>{
+      if(!pack){ document.getElementById('pk-xmsg').textContent='Generate the pack first.'; return; }
+      sent=true; document.getElementById('pk-xmsg').textContent='Marked sent for this session. Distro did not actually fire.';
+      drawExport(); previewExport();
+    };
+  }
+  document.getElementById('pk-gen').onclick=()=>{
+    pack=briefFallback(); sent=false;
+    document.getElementById('pk-msg').textContent='Pack generated from governed views · '+periodLabel();
+    preview(); drawExport();
+  };
+  document.getElementById('pk-ai').onclick=async()=>{
+    document.getElementById('pk-msg').textContent='AI Build drafting…';
+    const facts={audience:aud, period:periodLabel(), sales:cS, margin:cM, kpi, sections:selected(),
+      overdueTasks:+kpi.overdue_tasks, meat:+kpi.meat_outs, exceptions:+kpi.open_exceptions};
+    const prompt=`You are writing a Work World merchandising board pack. Return plain markdown only (no fences).
+Audience: ${aud}. Period: ${periodLabel()}.
+Include a title, scorecard bullets citing ONLY FACTS, included sections, attention, and 3 numbered next steps with owners.
+FACTS
+${JSON.stringify(facts)}`;
+    try{
+      const raw=await askLLM(prompt);
+      let t=raw&&typeof raw==='object'? (raw.text??raw.content??JSON.stringify(raw)): String(raw||'');
+      pack=t.replace(/^```(?:md|markdown)?\s*|\s*```$/g,'').trim()||briefFallback();
+    }catch(e){ pack=briefFallback(); }
+    sent=false;
+    document.getElementById('pk-msg').textContent='Narrative drafted · numbers still from the warehouse.';
+    preview(); drawExport();
+  };
+  paintAud(); paintSecs(); drawExport();
+  document.getElementById('pk-export-preview').innerHTML='<div class="hint" style="margin-top:12px">Generate the pack, then pick a distribution path.</div>';
 },
 async admin(){
   const rows=await runQ(`SELECT * FROM ${S}.data_health ORDER BY manually_managed DESC, table_name`);
@@ -2390,7 +2993,9 @@ const ASK_CHIPS=[
  'What are stockouts costing us right now?',
  'Which vendors run latest against their quoted lead times?',
  'Show open 3-way match exceptions by cause, with dollars and age.',
- 'How has weekly margin % trended over the last 13 weeks?'];
+ 'How has weekly margin % trended over the last 13 weeks?',
+ 'Which alert workflows would fire at Act sensitivity right now?',
+ 'Draft a leadership board pack for the last 13 weeks from the scorecard.'];
 let askBusy=false, askSeq=0;
 function mdLite(t){
   const lines=String(t||'').replace(/\r/g,'').split('\n');
@@ -2702,4 +3307,9 @@ async function freshness(){
     el.innerHTML='<div class="pill bad"><span class="pdot" style="background:#E4606D"></span>Feed status unavailable</div>';
   }
 }
-nav(); build(); show('ov-exec'); freshness();
+nav(); build();
+document.getElementById('main').addEventListener('click',e=>{
+  const b=e.target.closest('.period-pills button'); if(!b) return;
+  setPeriod(b.dataset.p);
+});
+show('ov-exec'); freshness();
