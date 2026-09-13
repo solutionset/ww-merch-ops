@@ -449,7 +449,8 @@ pricing:m=>header(m,'Pricing &amp; Promotion','Vendor price files in → staged 
     <div class="step"><span class="sn">3</span><div><b>Write NetSuite + stores</b><div>Approved events stage the price, spawn retag tasks, and draft the change digest. That is the operational effect.</div></div></div>
   </div>
   <div class="kpis autoload mt" id="pr-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
+  <div class="card focus mt" id="aib-pr-card"></div>
+  <div class="card mt" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
   <div class="row2 mt">
     <div class="card"><h3>Margin impact preview — Carhartt increase, effective 8/1</h3><div class="hint">Cost +5.5%, retail +10% staged from the vendor 832 file. Bars: margin % before vs after. The follow-the-retail decision is explicit, not accidental.</div><div class="chartbox"><canvas id="ch-pr-impact"></canvas></div><div class="legend" id="pr-impact-note"></div></div>
     <div class="card"><h3>Pre-buy option — announced increases</h3><div class="hint">Buy at today's cost before the effective date, capped at a 6-weeks-of-supply guardrail so a price play never becomes a markdown problem.</div><div class="chartbox"><canvas id="ch-pr-prebuy"></canvas></div><div class="legend" id="pr-prebuy-note"></div></div>
@@ -469,7 +470,8 @@ markdown:m=>header(m,'Markdown Management','Fewer, later, smarter markdowns: sel
     <div class="step"><span class="sn">3</span><div><b>Execute in stores</b><div>Label files and checklist tasks print locally and track to done. That is the operational effect.</div></div></div>
   </div>
   <div class="kpis autoload mt" id="md-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus">
+  <div class="card focus mt" id="aib-md-card"></div>
+  <div class="card mt">
     <h3>Rainwear season — sell-through vs the ladder</h3>
     <div class="hint">Weekly units (bars) and cumulative sell-through (line, right axis) against the MD-001 trigger. Orange markers = ladder steps. The question the chart answers: did we mark down because the season said so, or because the calendar did?</div>
     <div class="chartbox tall"><canvas id="ch-md-season"></canvas></div>
@@ -544,6 +546,121 @@ refedit:m=>header(m,'Reference Tables','The tables merchandising owns by hand �
     <textarea id="ref-sql" style="display:none;width:100%;height:180px;margin-top:12px;font-family:Consolas,monospace;font-size:11px;border:1px solid #C9D6EC;border-radius:8px;padding:10px"></textarea>
   </div>`,
 };
+
+function aiBuildParse(raw){
+  let t=raw;
+  if(t&&typeof t==='object') t=t.text??t.content??t.answer??JSON.stringify(t);
+  t=String(t||'').trim();
+  const fence=t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const blob=fence?fence[1]:t;
+  const start=blob.indexOf('{'), end=blob.lastIndexOf('}');
+  if(start>=0&&end>start){
+    try{ return JSON.parse(blob.slice(start,end+1)); }catch(e){}
+  }
+  return null;
+}
+function aiBuildFallback(scope, facts, q){
+  const f=facts||{};
+  const overdue=+f.overdue||0, tOver=+f.taskOverdue||0, sell=+f.sellThrough||0, floor=+f.floorBreaches||0;
+  const promoN=+f.promoEvents||0, delta=+f.annDelta||0, pbSav=+f.pbSav||0;
+  const all=scope==='all';
+  const ratings=[];
+  if(all||scope==='promo') ratings.push({topic:'Promotions', score: promoN&&!tOver?7: promoN?5:6, label: tOver?'Execution leak':'Usable',
+    why: promoN? `${promoN} promo events in the pipeline`+(tOver?`, ${tOver} store tasks overdue — the offer is better than the follow-through.`:'. Coordinate POS, endcap and labels or the lift never hits the floor.'): 'No live PromoStart/PromoEnd in the current window — treat vendor increases as the promo calendar until one is staged.'});
+  if(all||scope==='price') ratings.push({topic:'Price changes', score: overdue?4: (delta>0?8:6), label: overdue?'Not staged':'Follow-the-retail',
+    why: overdue? `${overdue} events overdue — not staged in NetSuite. Margin math is theoretical until Step 3 writes the file.` : `Staged 8/1 follow-the-retail is worth ${fmt$(delta)}/yr. Pre-buy on the table: ${fmt$(pbSav)} inside the 6-week guardrail.`});
+  if(all||scope==='markdown') ratings.push({topic:'Markdown efficacy', score: floor?5: (sell>=60?8:6), label: sell>=60?'Trigger working':'Watch the ladder',
+    why: `Rainwear sell-through ${sell||'—'}% vs the 60% trigger.`+(floor? ` ${floor} ladder steps sit below the margin floor — those are liquidation, not merchandising.`:' Floor is holding.')+(f.expDecision? ` Latest test: ${f.expDecision}.`:'')});
+  const next=[];
+  if(overdue) next.push({action:'Stage the overdue price/promo events in NetSuite before the effective date slips another day.', owner:'Pricing ops'});
+  if(tOver) next.push({action:'Clear overdue retag/endcap tasks — Communications already has the checklist.', owner:'Store ops'});
+  if(pbSav>0 && scope!=='markdown') next.push({action:'Approve or kill the 6-week pre-buy on announced increases so cash is not sitting in a maybe.', owner:'Buyer'});
+  if(floor) next.push({action:'Drop or delay the below-floor ladder steps; keep MD-004 delayed-ladder test as the default for rainwear-like categories.', owner:'Merch director'});
+  if(sell && sell<60) next.push({action:'Do not fire the next markdown step on the calendar. Recheck sell-through next week.', owner:'Planning'});
+  if(!next.length) next.push({action:'Log this scorecard against next month’s events so ratings become a trend, not a one-off read.', owner:'Merch ops'});
+  const takeaways=[
+    q? `You asked: “${q}”. Guidance below stays inside the governed price/promo/markdown facts on this page.` : 'Blank prompt = scorecard on the live pipeline. This is qualitative overlay, not a replacement for the charts.',
+    'A high rating that is not posted to NetSuite or executed in stores is still a dashboard. The numbered next steps are the operational effect.'
+  ];
+  return {ratings, takeaways, next_steps: next};
+}
+function aiBuildRender(el, brief){
+  const tone=s=> s>=8?'var(--green)': s>=6?'var(--navy)': s>=4?'var(--orange)':'var(--red)';
+  const rates=(brief.ratings||[]).map(r=>`<div class="aib-rate"><div class="topic">${esc(r.topic)}</div>
+    <div class="score" style="color:${tone(+r.score)}">${Number(r.score).toFixed(0)}<span>/10</span></div>
+    <div class="chip ${+r.score>=8?'green':+r.score>=6?'blue':+r.score>=4?'orange':'red'}">${esc(r.label||'')}</div>
+    <div class="why" style="margin-top:6px">${esc(r.why||'')}</div></div>`).join('');
+  const takes=(brief.takeaways||[]).map(t=>`<p>${esc(t)}</p>`).join('');
+  const steps=(brief.next_steps||[]).map((s,i)=>`<li><span class="sn">${i+1}</span><div>${esc(s.action||s)}${s.owner?`<span class="own">${esc(s.owner)}</span>`:''}</div></li>`).join('');
+  el.innerHTML=`<div class="aib-rates">${rates}</div>
+    <h3 style="margin:4px 0 6px">Suggestions</h3>${takes||'<p class="hint">No additional narrative.</p>'}
+    <h3 style="margin:12px 0 6px">Next steps</h3><ol class="aib-ns">${steps}</ol>`;
+}
+function bindAiBuild(id, opts){
+  const scopes=opts.scopes||[
+    {id:'all', label:'Full scorecard'},
+    {id:'promo', label:'Promotions'},
+    {id:'price', label:'Price changes'},
+    {id:'markdown', label:'Markdown efficacy'},
+  ];
+  let scope=opts.defaultScope||'all';
+  const card=document.getElementById(id+'-card');
+  if(!card) return;
+  card.classList.add('aibuild');
+  card.innerHTML=`<div class="aib-head">
+      <div><div class="aib-brand">AI Build</div>
+        <h3>${esc(opts.title||'Qualitative guidance')}</h3>
+        <div class="hint">${opts.hint||'Ratings, suggestions and numbered next steps grounded in the events on this page — so the section keeps improving, not just reporting.'}</div></div>
+      <span class="chip purple">continuous improvement</span>
+    </div>
+    <div class="pg-tabs" id="${id}-scopes"></div>
+    <div class="askform" style="margin-top:2px">
+      <textarea id="${id}-q" placeholder="${esc(opts.placeholder||'Ask about a promo, a vendor increase, or markdown timing — or leave blank for a scorecard.')}"></textarea>
+      <button class="btn" id="${id}-go">Generate</button>
+    </div>
+    <div class="chips" id="${id}-chips"></div>
+    <div id="${id}-out" class="aib-out"><div class="hint" style="margin:0">Pick a lens, optionally type a question, then Generate. The model reads the pipeline facts below — it does not invent a second set of numbers.</div></div>`;
+  const tabs=document.getElementById(id+'-scopes');
+  function paintTabs(){
+    tabs.innerHTML=scopes.map(s=>`<button data-s="${s.id}" class="${scope===s.id?'active':''}">${s.label}</button>`).join('');
+    tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>{ scope=b.dataset.s; paintTabs(); });
+  }
+  paintTabs();
+  const chips=opts.chips||['Score the 8/1 Carhartt increase','Are we over-promoting vs marking down?','What should we change before the next ladder step?'];
+  document.getElementById(id+'-chips').innerHTML=chips.map(c=>`<button type="button">${esc(c)}</button>`).join('');
+  document.querySelectorAll('#'+id+'-chips button').forEach(b=>b.onclick=()=>{
+    document.getElementById(id+'-q').value=b.textContent; generate();
+  });
+  async function generate(){
+    const q=document.getElementById(id+'-q').value.trim();
+    const btn=document.getElementById(id+'-go');
+    const out=document.getElementById(id+'-out');
+    btn.disabled=true; btn.textContent='…';
+    out.innerHTML='<div class="loading" style="padding:16px">{ AI BUILD SCORING THE PIPELINE }</div>';
+    const facts=typeof opts.facts==='function'? opts.facts(): (opts.facts||{});
+    const prompt=`You are AI Build for Work World merchandising (workwear, 38 stores, direct-to-store).
+Return ONLY JSON (no markdown fences) with this shape:
+{"ratings":[{"topic":"","score":0,"label":"","why":""}],"takeaways":[""],"next_steps":[{"action":"","owner":""}]}
+Rules:
+- 2–4 ratings, each score 1–10 integer, short label (two words), why citing ONLY the FACTS.
+- takeaways: 2–4 sentences of qualitative guidance for continuous improvement.
+- next_steps: 3 numbered operational actions with an owner (Buyer, Pricing ops, Store ops, Merch director, Planning).
+- Lens: ${scope}. User question (may be empty): ${q||'(scorecard)'}
+- Do not invent SKUs, dollars, or dates that are not in FACTS. If a field is missing, say the gap is the next step.
+
+FACTS
+${JSON.stringify(facts)}`;
+    let brief=null;
+    try{
+      const raw=await askLLM(prompt);
+      brief=aiBuildParse(raw);
+    }catch(e){ brief=null; }
+    if(!brief||!Array.isArray(brief.ratings)) brief=aiBuildFallback(scope, facts, q);
+    aiBuildRender(out, brief);
+    btn.disabled=false; btn.textContent='Generate';
+  }
+  document.getElementById(id+'-go').onclick=generate;
+}
 
 // ---------------- loaders ----------------
 const LOADERS={
@@ -2108,6 +2225,26 @@ async markdown(){
     {h:'Workflow',f:r=>`<span class="chip ${({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[r.workflow_state]||'gray'}">${esc(r.workflow_state)}</span>`},
     {h:'Labels',f:r=>r.label_file_generated==='true'?'<span class="chip green">Generated</span>':'<span class="chip gray">Pending</span>'},
     {h:'Store tasks',f:r=>+r.tasks_total?`${r.tasks_done}/${r.tasks_total} done`+(+r.tasks_overdue?` · <span style="color:var(--red);font-weight:700">${r.tasks_overdue} overdue</span>`:''):'—'}]);
+  bindAiBuild('aib-md',{
+    defaultScope:'markdown',
+    title:'Score this season — then say what to change',
+    hint:'Markdown efficacy is a test, not a vibe. AI Build rates the ladder against sell-through, the floor, and experiments, then writes the next three actions.',
+    placeholder:'e.g. Should we skip step 2 on rainwear, or is execution the real leak?',
+    chips:['Rate rainwear markdown efficacy','Are we marking down on the calendar or on sell-through?','What should change before the next ladder step?'],
+    facts:()=>({
+      sellThrough: last? +last.cum_sell_through_pct : null,
+      cumUnits: last? +last.cum_units : null,
+      estSupply: last? +last.est_season_supply : null,
+      floorBreaches,
+      policiesActive: pols.filter(p=>p.status==='Active').length,
+      policiesTesting: pols.filter(p=>p.status==='Testing').length,
+      expDecision: (exps[0]||{}).decision,
+      expHypothesis: (exps[0]||{}).hypothesis,
+      evtOverdue, taskOverdue,
+      stepsFired: steps.map(r=>({week:String(r.week_start).slice(0,10), step:r.markdown_step, sell:r.cum_sell_through_pct})),
+      overdueEvents: evts.filter(r=>r.workflow_state==='OVERDUE - not staged').map(r=>({id:r.event_id, scope:r.scope}))
+    })
+  });
 },
 async pricing(){
   const pipe=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v ORDER BY effective_date`);
@@ -2164,6 +2301,36 @@ async pricing(){
     {h:'Tier',k:'sophistication'},
     {h:'Ingestion method',f:r=>`<span class="chip ${r.sophistication==='Tier A'?'green':r.sophistication==='Tier B'?'blue':'orange'}">${esc(r.method)}</span>`},
     {h:'Vendors',k:'n',num:1}]);
+  let mdLast=null, mdFloor=0, mdExps=[];
+  try{
+    const season=await runQ(`SELECT * FROM ${S}.markdown_season_v ORDER BY week_start`);
+    mdLast=season[season.length-1]||null;
+    const lad=await runQ(`SELECT count(*) n FROM ${S}.markdown_ladder_v WHERE below_floor='true'`);
+    mdFloor=+(lad[0]&&lad[0].n||0);
+    mdExps=await runQ(`SELECT decision, hypothesis FROM ${S}.experiments WHERE lower(hypothesis) LIKE '%markdown%' OR lower(hypothesis) LIKE '%rainwear%' ORDER BY exp_id LIMIT 3`);
+  }catch(e){}
+  bindAiBuild('aib-pr',{
+    defaultScope:'all',
+    title:'Rate the book — then tell merchandising what to do next',
+    hint:'Promotions, vendor price changes, and markdown efficacy in one brief. Grounded in this pipeline so the section improves week to week, not just reports.',
+    placeholder:'Ask about a promo window, the 8/1 increase, pre-buy, or whether markdowns are earning their keep — or leave blank for a scorecard.',
+    chips:['Score the 8/1 Carhartt increase','Are we over-promoting vs marking down?','What should we change before the next event posts?'],
+    facts:()=>({
+      eventCount: pipe.length,
+      overdue: overdue.length,
+      upcoming: upcoming.slice(0,6).map(r=>({id:r.event_id, type:r.event_type, vendor:r.vendor_name, effective:String(r.effective_date).slice(0,10), state:r.workflow_state, tasksOverdue:+r.tasks_overdue})),
+      promoEvents: pipe.filter(r=>r.event_type==='PromoStart'||r.event_type==='PromoEnd').length,
+      vendorIncreases: pipe.filter(r=>r.event_type==='VendorIncrease').length,
+      markdownEvents: pipe.filter(r=>r.event_type==='Markdown').length,
+      taskOverdue: tOver,
+      annDelta, pbSav, pbCash,
+      impactTop: impact.slice(0,5).map(r=>({style:r.brand+' '+r.style_name, oldM:r.old_margin_pct, newM:r.new_margin_pct, yr:r.annual_margin_delta})),
+      sellThrough: mdLast? +mdLast.cum_sell_through_pct : null,
+      floorBreaches: mdFloor,
+      expDecision: (mdExps[0]||{}).decision,
+      expHypothesis: (mdExps[0]||{}).hypothesis
+    })
+  });
 },
 async comms(){
   const s=await runQ(`SELECT status, count(*) n FROM ${S}.task_board_v GROUP BY 1 ORDER BY n DESC`);
