@@ -67,11 +67,11 @@ const SECTIONS=[
   subs:[{id:'ov-exec',label:'Executive summary'},{id:'ov-inv',label:'Inventory & service'},
         {id:'ov-margin',label:'Margin & pricing'},{id:'ov-ops',label:'Operations & vendors'}]},
  {id:'planning', label:'Planning & Purchasing',
-  note:'Forecast → order timing → proposed POs, then continuous replenishment against observed lead times.',
-  subs:[{id:'demand',label:'Demand Planning'},{id:'replen',label:'Replenishment'}]},
+  note:'Forecast → order timing → proposed POs, then continuous replenishment against observed lead times. PO Generator is the bulk approve / delay / handoff queue before NetSuite.',
+  subs:[{id:'demand',label:'Demand Planning'},{id:'replen',label:'Replenishment'},{id:'pogen',label:'PO Generator', under:'replen'}]},
  {id:'operations', label:'Operations',
-  note:'Master PO → store receivers → invoices → statements, matched nightly at line level.',
-  subs:[{id:'match',label:'PO & 3-Way Match'}]},
+  note:'The engine matches PO → receiver → invoice nightly. Analysis explains the close; Exception triage is the bulk queue that writes NetSuite.',
+  subs:[{id:'match',label:'3-Way Match analysis'},{id:'matchq',label:'Exception triage', under:'match'}]},
  {id:'pricingmd', label:'Pricing & Markdowns',
   note:'Vendor price files and markdown ladders, each carrying its forecast margin impact to finance.',
   subs:[{id:'pricing',label:'Pricing & Promotion'},{id:'markdown',label:'Markdown Management'}]},
@@ -105,7 +105,7 @@ function sidenav(){
   document.getElementById('side-title').textContent=s.label;
   document.getElementById('side-note').textContent=s.note;
   document.getElementById('sidenav').innerHTML=s.subs.map(x=>
-    `<button data-p="${x.id}" class="${x.id===curPanel?'active':''}">${x.label}</button>`).join('');
+    `<button data-p="${x.id}" class="${x.id===curPanel?'active':''}${x.under?' nest':''}">${x.label}</button>`).join('');
   document.querySelectorAll('#sidenav button').forEach(b=>b.onclick=()=>show(b.dataset.p));
 }
 function show(id){
@@ -128,7 +128,7 @@ function table(rows, cols){
   return `<div class="tblwrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 function statusChip(s){
-  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue'};
+  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue','Proposed':'gray','Delay':'orange','Review':'purple','Assigned':'blue','Exported':'green','Clear':'green','Debit':'blue','Posted':'green','PriceVariance':'orange','QtyShort':'red','Freight':'purple','CostVariance':'orange'};
   return `<span class="chip ${map[s]||'gray'}">${esc(s)}</span>`;
 }
 function build(){
@@ -252,12 +252,17 @@ const SHELLS={
 'ov-ops':m=>header(m,'Operations &amp; vendors — summary','Rolls up Operations and Vendor Management: how much of the close is clearing itself, what is stuck, and what vendors are telling us.')+`
   <div class="kpis autoload" id="ovo-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
   <div class="row2">
-    <div class="card"><h3>Variance identified vs recovered</h3><div class="hint">The recovery engine by month; line is auto-clear rate.</div><div class="chartbox"><canvas id="ch-ovo-trend"></canvas></div></div>
+    <div class="card"><h3>Variance identified vs recovered</h3><div class="hint">The recovery engine by month; line is auto-clear rate. Line-level clear / debit / hold is <a href="#" onclick="show('matchq');return false">Exception triage</a>.</div><div class="chartbox"><canvas id="ch-ovo-trend"></canvas></div></div>
     <div class="card"><h3>Store task board</h3><div class="hint">Everything the app has asked stores to do, and whether they did it.</div><div class="chartbox"><canvas id="ch-ovo-tasks"></canvas></div></div>
   </div>
   <div class="card mt"><h3>Statements blocking payment</h3><div class="hint">A statement is payable only when its exceptions are closed — or paid net of debit memos.</div><div id="ovo-tbl"><div class="loading">{ LOADING }</div></div></div>`,
 demand:m=>header(m,'Demand Planning','Forecasted demand becomes purchase timing: slice the timeline, layer the weather signal where there is still time to react, and generate the PO proposal.')+`
-  <div class="card focus autoload" id="tlcard">
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>See demand</b><div>Slice the forecast by week, category, vendor, store. Weather splits into still-reactable vs already missed.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Flip to order-by week</b><div>Demand shifted back by observed lead time — this is when the PO must leave, not when the sale lands.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Generate the proposal</b><div>Then bulk-approve it in Replenishment → PO Generator so NetSuite receives a decision, not a dashboard export.</div></div></div>
+  </div>
+  <div class="card focus autoload mt" id="tlcard">
     <h3>Demand &amp; purchase timeline</h3>
     <div class="hint">Stacked weekly forecast, sliceable by category / brand / vendor / location. Switch the axis to <b>Order-by week</b> to see when purchases must be placed (demand shifted back by each vendor's observed lead time). The weather layer splits into reactable (order window still open) vs missed (lead time already passed).</div>
     <div class="controls" id="tl-controls"></div>
@@ -272,7 +277,7 @@ demand:m=>header(m,'Demand Planning','Forecasted demand becomes purchase timing:
   </div>
   <div class="card mt focus">
     <h3>Proposed PO generator</h3>
-    <div class="hint">Order qty per store x SKU = forecast over the horizon (+ weather if layered) + safety stock − current position (on hand + on order + in transit), rolled up to one master PO per vendor. Export the list as CSV for review or EDI staging.</div>
+    <div class="hint">Order qty per store x SKU = forecast over the horizon (+ weather if layered) + safety stock − current position (on hand + on order + in transit), rolled up to one master PO per vendor. For bulk approve / delay / teammate handoff and NetSuite ingestion, use <a href="#" id="po-to-gen">Planning → Replenishment → PO Generator</a>.</div>
     <div class="controls" id="po-controls"></div>
     <div id="po-out"><div class="loading" style="padding:14px">{ SET CONTROLS AND GENERATE }</div></div>
   </div>
@@ -301,7 +306,39 @@ replen:m=>header(m,'Purchase Planning &amp; Replenishment','Continuous ROP revie
   </div>
   <div class="row2 mt">
     <div class="card"><h3>Size-run health by store</h3><div class="hint">Style/color runs: intact vs fringe vs meat-size breaks.</div><div class="chartbox"><canvas id="ch-runs"></canvas></div></div>
-    <div class="card"><h3>Suggestion queue — most urgent</h3><div class="hint">Ordered by projected stockout date.</div><div id="rep-tbl"><div class="loading">{ LOADING }</div></div></div>
+    <div class="card"><h3>Suggestion queue — most urgent</h3><div class="hint">Ordered by projected stockout date. Approved buys leave this queue and land in <a href="#" onclick="show('pogen');return false">PO Generator</a> for bulk decisioning.</div><div id="rep-tbl"><div class="loading">{ LOADING }</div></div></div>
+  </div>`,
+pogen:m=>header(m,'PO Generator','Turn hundreds of proposed store POs into three piles: approve on conditions, delay what is not needed yet, and hand the gray area to a teammate — then export the approved set into NetSuite.')+`
+  <div class="kpis autoload" id="pg-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>Classify at scale</b><div>Rules score every proposed store PO so you are not clicking line by line.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Act on the piles</b><div>Approve the obvious, delay the healthy, assign the rest with a question.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Export to NetSuite</b><div>Same payload, several ingestion paths — CSV, EDI 850, API, File Cabinet.</div></div></div>
+  </div>
+  <div class="card focus mt">
+    <h3>Step 1 — condition rules — bulk classify</h3>
+    <div class="hint">Apply a rule to every matching proposed PO still in the queue. Engine recommendations run on load; override with the conditions below when policy changes.</div>
+    <div class="controls" id="pg-rule-controls"></div>
+    <div class="pg-rules" id="pg-rules"></div>
+    <div class="controls" style="margin-top:8px;margin-bottom:0">
+      <div style="align-self:flex-end"><button class="btn" id="pg-apply">Apply selected rule to matches</button></div>
+      <div style="align-self:flex-end"><button class="btn ghost" id="pg-reset">Reset to engine recommendations</button></div>
+      <span id="pg-rule-msg" style="align-self:center;font-size:12px;color:var(--sub)"></span>
+    </div>
+  </div>
+  <div class="card mt">
+    <h3>Step 2 — decision queue</h3>
+    <div class="hint">Direct-to-store: one proposed mini-PO per store × vendor, rolled under a master PO per vendor. Check rows, then approve, delay, or bring in a teammate.</div>
+    <div class="pg-tabs" id="pg-tabs"></div>
+    <div class="controls" id="pg-queue-controls"></div>
+    <div class="pg-actions" id="pg-actions"></div>
+    <div id="pg-tbl"><div class="loading">{ LOADING }</div></div>
+  </div>
+  <div class="card mt" id="pg-export-card" style="display:none">
+    <h3>Step 3 — export approved POs into NetSuite</h3>
+    <div class="hint">The workflow is the same payload. Pick how merchandising hands it to ERP — download-and-upload, EDI, API, or a File Cabinet job. Nothing posts in this demo.</div>
+    <div class="export-grid" id="pg-export-grid"></div>
+    <div id="pg-export-preview"></div>
   </div>`,
 ats:m=>header(m,'Vendor Availability (ATS)','What vendors can actually ship — EDI 846 for Tier A, portal pulls for Tier B, parsed email for Tier C.')+`
   <div class="card focus autoload" id="ats-tbl"><div class="loading">{ LOADING }</div></div>
@@ -312,26 +349,70 @@ ats:m=>header(m,'Vendor Availability (ATS)','What vendors can actually ship — 
 deals:m=>header(m,'Vendor Programs &amp; Opportunity Buys','Tier-break coordination, closeouts, SMUs, preseason books — AI-scored for margin uplift vs weeks-of-supply risk.')+`
   <div class="kpis autoload" id="deal-kpis"></div>
   <div class="card focus" id="deal-tbl"><div class="loading">{ LOADING }</div></div>`,
-match:m=>header(m,'PO Management &amp; 3-Way Reconciliation','Master PO → per-store mini-POs → store receivers → master statements, matched at line level nightly. The longest step of the close, made a queue instead of a project.')+`
+match:m=>header(m,'3-Way Match analysis','Why the close is long: every store PO, receiver, invoice and statement on one tree — and whether the nightly engine cleared the line or parked an exception. Work the exceptions next door, not here.')+`
   <div class="kpis autoload" id="m-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus">
+  <div class="steps steps-4">
+    <div class="step"><span class="sn">1</span><div><b>Documents land</b><div>Master PO → store mini-PO → receiver → vendor invoice → master statement. Direct-to-store, not a warehouse ASN.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Nightly line match</b><div>Qty and cost on PO vs received vs invoiced. Clean lines auto-clear. No one opens those in NetSuite.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Exceptions park</b><div>Price, short-ship, freight. Aged dollars are the close-cycle killers — this page shows where they sit.</div></div></div>
+    <div class="step"><span class="sn">4</span><div><b>Pay-file gate</b><div>A statement pays only when exceptions are closed or net of debit memos. Release happens in Exception triage.</div></div></div>
+  </div>
+  <div class="card focus mt">
     <h3>Document explorer — one vendor buy, end to end</h3>
-    <div class="hint">Pick a master PO to walk the direct-to-store tree: every mini-PO, its receipt, its invoice, its statement, and what the match engine found. This is the "single PO table" answer to the monthly-close quagmire.</div>
+    <div class="hint">Pick a master PO to walk the tree. This is the diagnostic: which store is blocking the statement. To clear, debit, or hold those lines in NetSuite, open <a href="#" onclick="show('matchq');return false">Exception triage</a>.</div>
     <div class="controls" id="doc-controls"></div>
     <div id="doc-summary"></div>
     <div id="doc-tree"><div class="loading">{ LOADING }</div></div>
   </div>
   <div class="row2 mt">
-    <div class="card"><h3>Variance identified vs recovered by month</h3><div class="hint">The recovery engine at work — line = auto-clear rate (right axis).</div><div class="chartbox"><canvas id="ch-mtrend"></canvas></div></div>
-    <div class="card"><h3>Open exception aging &amp; root cause</h3><div class="hint">Aging buckets by count; donut = open $ by cause. Old exceptions are the close-cycle killers.</div><div class="row2"><div class="chartbox" style="height:240px"><canvas id="ch-mage"></canvas></div><div class="chartbox" style="height:240px"><canvas id="ch-var"></canvas></div></div></div>
+    <div class="card"><h3>Variance identified vs recovered by month</h3><div class="hint">The recovery engine at work — line = auto-clear rate (right axis). A dashboard until triage posts the debit or write-off.</div><div class="chartbox"><canvas id="ch-mtrend"></canvas></div></div>
+    <div class="card"><h3>Open exception aging &amp; root cause</h3><div class="hint">Aging buckets by count; donut = open $ by cause. Use this to set triage rules (e.g. auto-clear &lt; $25, debit qty shorts).</div><div class="row2"><div class="chartbox" style="height:240px"><canvas id="ch-mage"></canvas></div><div class="chartbox" style="height:240px"><canvas id="ch-var"></canvas></div></div></div>
   </div>
   <div class="row2 mt">
-    <div class="card"><h3>Master statement reconciliation</h3><div class="hint">Pay-file gate: a statement is payable only when its exceptions are closed — or paid net of debit memos.</div><div id="m-stmt"><div class="loading">{ LOADING }</div></div></div>
-    <div class="card"><h3>Exception queue</h3><div class="hint">AI-suggested resolutions; human accountability retained.</div><div id="m-tbl"><div class="loading">{ LOADING }</div></div></div>
+    <div class="card"><h3>Master statement reconciliation</h3><div class="hint">Pay-file diagnostic: payable, pay-less-debits, or hold. Clearing the hold is a triage action, not a chart.</div><div id="m-stmt"><div class="loading">{ LOADING }</div></div></div>
+    <div class="card"><h3>What is waiting on a human</h3><div class="hint">Rolled up from the exception queue — line-level work lives on the next page.</div><div id="m-tbl"><div class="loading">{ LOADING }</div></div></div>
+  </div>`,
+matchq:m=>header(m,'Exception triage','The close is a queue, not a project: bulk-clear noise, debit what we can recover, hold what is still in transit, and hand the rest to AP or the buyer — then post the decisions to NetSuite.')+`
+  <div class="kpis autoload" id="mx-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>Classify by rule</b><div>Tolerance, qty short, aged material, freight — score every open line so AP is not clicking invoices one at a time.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Act on the piles</b><div>Clear, debit, hold, or assign with a question. Same pattern as PO Generator: humans on the gray area only.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Post to NetSuite</b><div>Vendor bill variances, debit memos, and pay-file holds — CSV, REST, EDI 812, or File Cabinet job.</div></div></div>
+  </div>
+  <div class="card focus mt">
+    <h3>Step 1 — condition rules</h3>
+    <div class="hint">Engine recommendations run on load from the open exception queue. Apply a rule to every match still in play; analysis of aging and cause lives on <a href="#" onclick="show('match');return false">3-Way Match analysis</a>.</div>
+    <div class="controls" id="mx-rule-controls"></div>
+    <div class="pg-rules" id="mx-rules"></div>
+    <div class="controls" style="margin-top:8px;margin-bottom:0">
+      <div style="align-self:flex-end"><button class="btn" id="mx-apply">Apply selected rule to matches</button></div>
+      <div style="align-self:flex-end"><button class="btn ghost" id="mx-reset">Reset to engine recommendations</button></div>
+      <span id="mx-rule-msg" style="align-self:center;font-size:12px;color:var(--sub)"></span>
+    </div>
+  </div>
+  <div class="card mt">
+    <h3>Step 2 — decision queue</h3>
+    <div class="hint">Each row is a matched line the nightly job could not auto-clear. Check rows, then clear, debit, hold payment, or bring in a teammate.</div>
+    <div class="pg-tabs" id="mx-tabs"></div>
+    <div class="controls" id="mx-queue-controls"></div>
+    <div class="pg-actions" id="mx-actions"></div>
+    <div id="mx-tbl"><div class="loading">{ LOADING }</div></div>
+  </div>
+  <div class="card mt" id="mx-export-card" style="display:none">
+    <h3>Step 3 — post approved decisions to NetSuite</h3>
+    <div class="hint">Cleared lines write off or accept the bill. Debit pile becomes vendor credits / debit memos. Holds stay off the pay file. Same payload, several ingestion paths. Nothing posts in this demo.</div>
+    <div class="export-grid" id="mx-export-grid"></div>
+    <div id="mx-export-preview"></div>
   </div>`,
 pricing:m=>header(m,'Pricing &amp; Promotion','Vendor price files in → staged ERP updates out. Every event carries its margin impact, its pre-buy option, and its store execution trail.')+`
-  <div class="kpis autoload" id="pr-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>Ingest the vendor file</b><div>EDI 832, portal, or parsed email — diffs land against price_master. Nothing touches the ERP yet.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Approve with margin in view</b><div>Follow-the-retail and the 6-week pre-buy are decisions, not surprises after the file posts.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Write NetSuite + stores</b><div>Approved events stage the price, spawn retag tasks, and draft the change digest. That is the operational effect.</div></div></div>
+  </div>
+  <div class="kpis autoload mt" id="pr-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus mt" id="aib-pr-card"></div>
+  <div class="card mt" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
   <div class="row2 mt">
     <div class="card"><h3>Margin impact preview — Carhartt increase, effective 8/1</h3><div class="hint">Cost +5.5%, retail +10% staged from the vendor 832 file. Bars: margin % before vs after. The follow-the-retail decision is explicit, not accidental.</div><div class="chartbox"><canvas id="ch-pr-impact"></canvas></div><div class="legend" id="pr-impact-note"></div></div>
     <div class="card"><h3>Pre-buy option — announced increases</h3><div class="hint">Buy at today's cost before the effective date, capped at a 6-weeks-of-supply guardrail so a price play never becomes a markdown problem.</div><div class="chartbox"><canvas id="ch-pr-prebuy"></canvas></div><div class="legend" id="pr-prebuy-note"></div></div>
@@ -345,8 +426,14 @@ pricing:m=>header(m,'Pricing &amp; Promotion','Vendor price files in → staged 
         <li><b>Promo orchestration:</b> PromoStart/PromoEnd events coordinate POS price, endcap task, and label windows.</li></ul></div>
   </div>`,
 markdown:m=>header(m,'Markdown Management','Fewer, later, smarter markdowns: sell-through triggers the ladder, the floor protects margin, experiments tune the timing, and stores get the label files.')+`
-  <div class="kpis autoload" id="md-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus">
+  <div class="steps">
+    <div class="step"><span class="sn">1</span><div><b>Trigger, don't calendar</b><div>Sell-through vs the ladder — mark down because the season said so.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Protect the floor</b><div>Skip steps that destroy margin. Timing is a test, not a habit.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Execute in stores</b><div>Label files and checklist tasks print locally and track to done. That is the operational effect.</div></div></div>
+  </div>
+  <div class="kpis autoload mt" id="md-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus mt" id="aib-md-card"></div>
+  <div class="card mt">
     <h3>Rainwear season — sell-through vs the ladder</h3>
     <div class="hint">Weekly units (bars) and cumulative sell-through (line, right axis) against the MD-001 trigger. Orange markers = ladder steps. The question the chart answers: did we mark down because the season said so, or because the calendar did?</div>
     <div class="chartbox tall"><canvas id="ch-md-season"></canvas></div>
@@ -380,7 +467,7 @@ ask:m=>header(m,'Ask SolutionSet','A governed analyst over the merchandising lay
       <div class="railcard">
         <h4>What the analyst can see</h4>
         <div class="cap">24 governed views · read-only</div>
-        <p id="ask-scope">Sales, inventory and forecast facts; the replenishment queue; PO / receipt / invoice matching; vendor lead times, availability and deals; price and markdown events; store tasks. It cannot see anything outside the governed layer, and it cannot write.</p>
+        <p id="ask-scope">Sales, inventory and forecast facts; the replenishment queue and proposed PO generator; 3-way match analysis and the exception triage queue; vendor lead times, availability and deals; price and markdown events; store tasks. It cannot see anything outside the governed layer, and it cannot write.</p>
       </div>
       <div class="railcard">
         <h4>Context documents</h4>
@@ -421,6 +508,121 @@ refedit:m=>header(m,'Reference Tables','The tables merchandising owns by hand �
     <textarea id="ref-sql" style="display:none;width:100%;height:180px;margin-top:12px;font-family:Consolas,monospace;font-size:11px;border:1px solid #C9D6EC;border-radius:8px;padding:10px"></textarea>
   </div>`,
 };
+
+function aiBuildParse(raw){
+  let t=raw;
+  if(t&&typeof t==='object') t=t.text??t.content??t.answer??JSON.stringify(t);
+  t=String(t||'').trim();
+  const fence=t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const blob=fence?fence[1]:t;
+  const start=blob.indexOf('{'), end=blob.lastIndexOf('}');
+  if(start>=0&&end>start){
+    try{ return JSON.parse(blob.slice(start,end+1)); }catch(e){}
+  }
+  return null;
+}
+function aiBuildFallback(scope, facts, q){
+  const f=facts||{};
+  const overdue=+f.overdue||0, tOver=+f.taskOverdue||0, sell=+f.sellThrough||0, floor=+f.floorBreaches||0;
+  const promoN=+f.promoEvents||0, delta=+f.annDelta||0, pbSav=+f.pbSav||0;
+  const all=scope==='all';
+  const ratings=[];
+  if(all||scope==='promo') ratings.push({topic:'Promotions', score: promoN&&!tOver?7: promoN?5:6, label: tOver?'Execution leak':'Usable',
+    why: promoN? `${promoN} promo events in the pipeline`+(tOver?`, ${tOver} store tasks overdue — the offer is better than the follow-through.`:'. Coordinate POS, endcap and labels or the lift never hits the floor.'): 'No live PromoStart/PromoEnd in the current window — treat vendor increases as the promo calendar until one is staged.'});
+  if(all||scope==='price') ratings.push({topic:'Price changes', score: overdue?4: (delta>0?8:6), label: overdue?'Not staged':'Follow-the-retail',
+    why: overdue? `${overdue} events overdue — not staged in NetSuite. Margin math is theoretical until Step 3 writes the file.` : `Staged 8/1 follow-the-retail is worth ${fmt$(delta)}/yr. Pre-buy on the table: ${fmt$(pbSav)} inside the 6-week guardrail.`});
+  if(all||scope==='markdown') ratings.push({topic:'Markdown efficacy', score: floor?5: (sell>=60?8:6), label: sell>=60?'Trigger working':'Watch the ladder',
+    why: `Rainwear sell-through ${sell||'—'}% vs the 60% trigger.`+(floor? ` ${floor} ladder steps sit below the margin floor — those are liquidation, not merchandising.`:' Floor is holding.')+(f.expDecision? ` Latest test: ${f.expDecision}.`:'')});
+  const next=[];
+  if(overdue) next.push({action:'Stage the overdue price/promo events in NetSuite before the effective date slips another day.', owner:'Pricing ops'});
+  if(tOver) next.push({action:'Clear overdue retag/endcap tasks — Communications already has the checklist.', owner:'Store ops'});
+  if(pbSav>0 && scope!=='markdown') next.push({action:'Approve or kill the 6-week pre-buy on announced increases so cash is not sitting in a maybe.', owner:'Buyer'});
+  if(floor) next.push({action:'Drop or delay the below-floor ladder steps; keep MD-004 delayed-ladder test as the default for rainwear-like categories.', owner:'Merch director'});
+  if(sell && sell<60) next.push({action:'Do not fire the next markdown step on the calendar. Recheck sell-through next week.', owner:'Planning'});
+  if(!next.length) next.push({action:'Log this scorecard against next month’s events so ratings become a trend, not a one-off read.', owner:'Merch ops'});
+  const takeaways=[
+    q? `You asked: “${q}”. Guidance below stays inside the governed price/promo/markdown facts on this page.` : 'Blank prompt = scorecard on the live pipeline. This is qualitative overlay, not a replacement for the charts.',
+    'A high rating that is not posted to NetSuite or executed in stores is still a dashboard. The numbered next steps are the operational effect.'
+  ];
+  return {ratings, takeaways, next_steps: next};
+}
+function aiBuildRender(el, brief){
+  const tone=s=> s>=8?'var(--green)': s>=6?'var(--navy)': s>=4?'var(--orange)':'var(--red)';
+  const rates=(brief.ratings||[]).map(r=>`<div class="aib-rate"><div class="topic">${esc(r.topic)}</div>
+    <div class="score" style="color:${tone(+r.score)}">${Number(r.score).toFixed(0)}<span>/10</span></div>
+    <div class="chip ${+r.score>=8?'green':+r.score>=6?'blue':+r.score>=4?'orange':'red'}">${esc(r.label||'')}</div>
+    <div class="why" style="margin-top:6px">${esc(r.why||'')}</div></div>`).join('');
+  const takes=(brief.takeaways||[]).map(t=>`<p>${esc(t)}</p>`).join('');
+  const steps=(brief.next_steps||[]).map((s,i)=>`<li><span class="sn">${i+1}</span><div>${esc(s.action||s)}${s.owner?`<span class="own">${esc(s.owner)}</span>`:''}</div></li>`).join('');
+  el.innerHTML=`<div class="aib-rates">${rates}</div>
+    <h3 style="margin:4px 0 6px">Suggestions</h3>${takes||'<p class="hint">No additional narrative.</p>'}
+    <h3 style="margin:12px 0 6px">Next steps</h3><ol class="aib-ns">${steps}</ol>`;
+}
+function bindAiBuild(id, opts){
+  const scopes=opts.scopes||[
+    {id:'all', label:'Full scorecard'},
+    {id:'promo', label:'Promotions'},
+    {id:'price', label:'Price changes'},
+    {id:'markdown', label:'Markdown efficacy'},
+  ];
+  let scope=opts.defaultScope||'all';
+  const card=document.getElementById(id+'-card');
+  if(!card) return;
+  card.classList.add('aibuild');
+  card.innerHTML=`<div class="aib-head">
+      <div><div class="aib-brand">AI Build</div>
+        <h3>${esc(opts.title||'Qualitative guidance')}</h3>
+        <div class="hint">${opts.hint||'Ratings, suggestions and numbered next steps grounded in the events on this page — so the section keeps improving, not just reporting.'}</div></div>
+      <span class="chip purple">continuous improvement</span>
+    </div>
+    <div class="pg-tabs" id="${id}-scopes"></div>
+    <div class="askform" style="margin-top:2px">
+      <textarea id="${id}-q" placeholder="${esc(opts.placeholder||'Ask about a promo, a vendor increase, or markdown timing — or leave blank for a scorecard.')}"></textarea>
+      <button class="btn" id="${id}-go">Generate</button>
+    </div>
+    <div class="chips" id="${id}-chips"></div>
+    <div id="${id}-out" class="aib-out"><div class="hint" style="margin:0">Pick a lens, optionally type a question, then Generate. The model reads the pipeline facts below — it does not invent a second set of numbers.</div></div>`;
+  const tabs=document.getElementById(id+'-scopes');
+  function paintTabs(){
+    tabs.innerHTML=scopes.map(s=>`<button data-s="${s.id}" class="${scope===s.id?'active':''}">${s.label}</button>`).join('');
+    tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>{ scope=b.dataset.s; paintTabs(); });
+  }
+  paintTabs();
+  const chips=opts.chips||['Score the 8/1 Carhartt increase','Are we over-promoting vs marking down?','What should we change before the next ladder step?'];
+  document.getElementById(id+'-chips').innerHTML=chips.map(c=>`<button type="button">${esc(c)}</button>`).join('');
+  document.querySelectorAll('#'+id+'-chips button').forEach(b=>b.onclick=()=>{
+    document.getElementById(id+'-q').value=b.textContent; generate();
+  });
+  async function generate(){
+    const q=document.getElementById(id+'-q').value.trim();
+    const btn=document.getElementById(id+'-go');
+    const out=document.getElementById(id+'-out');
+    btn.disabled=true; btn.textContent='…';
+    out.innerHTML='<div class="loading" style="padding:16px">{ AI BUILD SCORING THE PIPELINE }</div>';
+    const facts=typeof opts.facts==='function'? opts.facts(): (opts.facts||{});
+    const prompt=`You are AI Build for Work World merchandising (workwear, 38 stores, direct-to-store).
+Return ONLY JSON (no markdown fences) with this shape:
+{"ratings":[{"topic":"","score":0,"label":"","why":""}],"takeaways":[""],"next_steps":[{"action":"","owner":""}]}
+Rules:
+- 2–4 ratings, each score 1–10 integer, short label (two words), why citing ONLY the FACTS.
+- takeaways: 2–4 sentences of qualitative guidance for continuous improvement.
+- next_steps: 3 numbered operational actions with an owner (Buyer, Pricing ops, Store ops, Merch director, Planning).
+- Lens: ${scope}. User question (may be empty): ${q||'(scorecard)'}
+- Do not invent SKUs, dollars, or dates that are not in FACTS. If a field is missing, say the gap is the next step.
+
+FACTS
+${JSON.stringify(facts)}`;
+    let brief=null;
+    try{
+      const raw=await askLLM(prompt);
+      brief=aiBuildParse(raw);
+    }catch(e){ brief=null; }
+    if(!brief||!Array.isArray(brief.ratings)) brief=aiBuildFallback(scope, facts, q);
+    aiBuildRender(out, brief);
+    btn.disabled=false; btn.textContent='Generate';
+  }
+  document.getElementById(id+'-go').onclick=generate;
+}
 
 // ---------------- loaders ----------------
 const LOADERS={
@@ -571,7 +773,7 @@ async 'ov-exec'(){
   // ---------- attention list ----------
   const [kpi]=await runQ(`SELECT * FROM ${S}.kpi_summary_v`);
   const A=[
-   ['Open 3-way exceptions', kpi.open_exceptions, fmt$(kpi.open_exception_amt)+' awaiting recovery', 'Operations → PO & 3-Way Match', +kpi.open_exceptions>0],
+   ['Open 3-way exceptions', kpi.open_exceptions, fmt$(kpi.open_exception_amt)+' awaiting recovery', 'Operations → Exception triage', +kpi.open_exceptions>0],
    ['Replenishment suggestions', kpi.replen_suggestions, kpi.expedite_checks+' flagged for expedite', 'Planning → Replenishment', +kpi.replen_suggestions>0],
    ['Meat-size breaks', kpi.meat_outs, 'core sizes out of stock right now', 'Planning → Replenishment', +kpi.meat_outs>0],
    ['Open vendor offers', kpi.open_deals, fmt$(kpi.open_deal_savings)+' savings on the table', 'Vendor Management → Deals', +kpi.open_deals>0],
@@ -829,6 +1031,8 @@ async demand(){
   }
   document.getElementById('po-go').onclick=genPO;
   genPO();
+  const toGen=document.getElementById('po-to-gen');
+  if(toGen) toGen.onclick=e=>{ e.preventDefault(); show('pogen'); };
   // ---------- size overlay (existing) ----------
   const rows=await runQ(`SELECT * FROM ${S}.size_demand_v`);
   const ctrl=document.getElementById('sd-controls');
@@ -985,6 +1189,321 @@ async replen(){
     {h:'Note',f:r=>esc(r.tier_break_note||r.reason)},{h:'Status',f:r=>statusChip(r.status)}]);
 },
 
+async pogen(){
+  let PO=[];
+  try{ PO=await runQ(`SELECT * FROM ${S}.proposed_po_v`); }
+  catch(e){
+    const demo=(store,name,zone,ven,vid,brand,style,size,pos,fc4,fc2,wx4,cost,moq,note)=>({
+      store_id:store, store_name:name, climate_zone:zone, sku_id:brand+'-'+style+'-'+size, brand, style_name:style, color:'Black', size,
+      category:'Tops', vendor_id:vid, vendor_name:ven, unit_cost:String(cost), position:String(pos), safety_stock:'2',
+      fc_2wk:String(fc2), fc_4wk:String(fc4), fc_6wk:String(fc4*1.4), fc_8wk:String(fc4*1.8),
+      wx_2wk:String(Math.round(wx4/2)), wx_4wk:String(wx4), wx_6wk:String(wx4), wx_8wk:String(wx4),
+      lead_days_p50:'21', moq_units:String(moq), expected_receipt:'2026-08-04', tier_break_note:note||''
+    });
+    PO=[
+      demo('S01','Fargo','Cold','Carhartt','V001','Carhartt','Dungaree Jacket','M',4,18,10,2,78,288,'Consolidate to 288-unit tier (OPP-2026-011)'),
+      demo('S01','Fargo','Cold','Carhartt','V001','Carhartt','Dungaree Jacket','L',2,22,12,2,78,288,''),
+      demo('S12','Des Moines','Midwest','Carhartt','V001','Carhartt','Work Pant','32x32',40,8,3,0,42,288,''),
+      demo('S04','Duluth','Cold','Wolverine','V002','Wolverine','Steel Toe','10',3,14,8,1,96,48,''),
+      demo('S04','Duluth','Cold','Wolverine','V002','Wolverine','Steel Toe','11',1,11,6,1,96,48,''),
+      demo('S22','Sioux Falls','Midwest','Red Kap','V008','Red Kap','Work Shirt','L',18,6,2,0,22,24,''),
+      demo('S08','Bismarck','Cold','Helly Hansen','V012','Helly Hansen','Rain Jacket','XL',6,9,3,12,64,12,'Preseason book pricing (OPP-2026-013)'),
+      demo('S18','Rochester','Midwest','Dickies','V006','Dickies','Coverall','L',2,16,9,0,38,36,''),
+      demo('S09','Grand Forks','Cold','Carhartt','V001','Carhartt','Beanie','OS',50,4,1,0,12,288,''),
+      demo('S31','Mankato','Midwest','Wolverine','V002','Wolverine','Hiker','9',8,7,2,0,88,48,''),
+    ];
+    document.getElementById('pg-kpis').insertAdjacentHTML('beforebegin',
+      '<div class="warnbox">Warehouse not reachable — showing a short sample queue so you can walk the approve / delay / handoff / export flow.</div>');
+  }
+  const H=4, wxOn=true;
+  const TEAM=[
+    {id:'maya', name:'Maya Chen', role:'Buyer — Carhartt / Wolverine'},
+    {id:'tom', name:'Tom Ruiz', role:'Inventory planner'},
+    {id:'priya', name:'Priya Shah', role:'Vendor ops / EDI'},
+    {id:'jordan', name:'Jordan Hale', role:'Regional merch (Midwest)'},
+  ];
+  const RULES=[
+    {id:'urgent', label:'Cover under 3 weeks, or a 2-week shortfall', bucket:'Approved', why:'Stockout risk inside observed lead time'},
+    {id:'healthy', label:'Cover 6+ weeks and no 2-week shortfall', bucket:'Delay', why:'Position already covers the horizon — not needed yet'},
+    {id:'moq', label:'Vendor roll-up is below MOQ', bucket:'Review', why:'Cannot ship as-is; buyer or vendor ops should split, pad, or hold'},
+    {id:'wx', label:'Weather is more than half of the proposed qty', bucket:'Review', why:'Event-driven demand — confirm the window is still open'},
+    {id:'tier', label:'Has a tier-break or preseason note', bucket:'Review', why:'Opportunity buy sitting on a replen PO — merch should weigh in'},
+  ];
+  function rec(p){
+    if(p.wos>=6 && p.need2<=0) return {bucket:'Delay', why:'Cover is healthy — defer this cycle'};
+    if(p.belowMoq) return {bucket:'Review', why:'Below vendor MOQ'};
+    if(p.wxShare>0.5) return {bucket:'Review', why:'Mostly weather-driven'};
+    if(p.tier) return {bucket:'Review', why:'Tier-break / preseason attached'};
+    if(p.wos<3 || p.need2>0) return {bucket:'Approved', why:'Cover thin or 2-week need'};
+    return {bucket:'Review', why:'Mixed signal — second set of eyes'};
+  }
+  function matchesRule(p, rid){
+    if(rid==='urgent') return p.wos<3 || p.need2>0;
+    if(rid==='healthy') return p.wos>=6 && p.need2<=0;
+    if(rid==='moq') return p.belowMoq;
+    if(rid==='wx') return p.wxShare>0.5;
+    if(rid==='tier') return !!p.tier;
+    return false;
+  }
+  // Line math (same as Demand Planning generator), then roll to store × vendor mini-POs.
+  const lines=[];
+  PO.forEach(r=>{
+    const need=+r['fc_'+H+'wk'] + (wxOn? +r['wx_'+H+'wk'] : 0) + +r.safety_stock - +r.position;
+    const qty=Math.max(0, Math.ceil(need));
+    if(qty<=0) return;
+    const need2=Math.max(0, Math.ceil(+r.fc_2wk + (wxOn? +r.wx_2wk : 0) + +r.safety_stock - +r.position));
+    lines.push({...r, qty, ext:+(qty*r.unit_cost).toFixed(2), need2, wx:+(wxOn? +r['wx_'+H+'wk'] : 0)});
+  });
+  const venTot={};
+  lines.forEach(l=>{ const k=l.vendor_id; venTot[k]=venTot[k]||{units:0, moq:+l.moq_units}; venTot[k].units+=l.qty; });
+  const by={};
+  lines.forEach(l=>{
+    const k=l.vendor_id+'|'+l.store_id;
+    const o=by[k]=by[k]||{id:k, vendor_id:l.vendor_id, vendor:l.vendor_name, store_id:l.store_id, store_name:l.store_name,
+      climate:l.climate_zone, lines:0, units:0, cost:0, pos:0, fc4:0, wx:0, need2:0, moq:+l.moq_units, receipt:l.expected_receipt,
+      lead:+l.lead_days_p50, notes:new Set(), sku:[]};
+    o.lines++; o.units+=l.qty; o.cost+=l.ext; o.pos+=+l.position; o.fc4+=+l.fc_4wk; o.wx+=l.wx; o.need2+=l.need2;
+    if(l.tier_break_note) o.notes.add(l.tier_break_note);
+    if(o.sku.length<3) o.sku.push(l.brand+' '+l.style_name+' '+l.size);
+  });
+  const queue=Object.values(by).map(p=>{
+    const weekly=p.fc4/4;
+    p.wos=weekly>0? +(p.pos/weekly).toFixed(1) : 99;
+    p.wxShare=p.units? p.wx/p.units : 0;
+    p.belowMoq=venTot[p.vendor_id].units < venTot[p.vendor_id].moq;
+    p.tier=[...p.notes][0]||'';
+    p.master='MPO-PROP-'+String(p.vendor_id).slice(1);
+    p.poId='SPO-'+p.store_id+'-'+p.vendor_id;
+    const r=rec(p);
+    p.engine=r.bucket; p.engineWhy=r.why;
+    p.status=r.bucket; p.why=r.why;
+    p.assignee=''; p.note=''; p.sel=false;
+    return p;
+  }).sort((a,b)=>b.cost-a.cost);
+
+  let tab='Approved';
+  let ruleId='urgent';
+  let exportOpen=false;
+  let exportMethod=null;
+
+  document.getElementById('pg-rule-controls').innerHTML=`
+    <div><label>Vendor</label><select id="pg-ven"><option value="">All vendors</option>${uniq(queue.map(p=>p.vendor)).sort().map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>
+    <div><label>Region</label><select id="pg-reg"><option value="">All regions</option>${uniq(queue.map(p=>p.climate)).sort().map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>`;
+  document.getElementById('pg-rules').innerHTML=RULES.map(r=>`
+    <label class="pg-rule"><input type="radio" name="pg-rule" value="${r.id}" ${r.id===ruleId?'checked':''}>
+      <span><b>${esc(r.label)}</b> → ${statusChip(r.bucket)}<br><span class="why">${esc(r.why)}</span></span></label>`).join('');
+  document.querySelectorAll('input[name="pg-rule"]').forEach(i=>i.onchange=()=>{ ruleId=i.value; });
+
+  document.getElementById('pg-queue-controls').innerHTML=`
+    <div><label>Assign to</label><select id="pg-who"><option value="">Choose teammate…</option>${TEAM.map(t=>`<option value="${t.id}">${esc(t.name)} — ${esc(t.role)}</option>`).join('')}</select></div>
+    <div style="flex:1;min-width:180px"><label>Question / note</label><input id="pg-q" placeholder="e.g. Pad to MOQ or wait for ATS?" style="border:1px solid #C9D6EC;border-radius:8px;padding:6px 8px;font-size:12.5px;width:100%"></div>`;
+  document.getElementById('pg-actions').innerHTML=`
+    <button class="btn" id="pg-approve">Approve selected</button>
+    <button class="btn ghost" id="pg-delay">Delay selected (next cycle)</button>
+    <button class="btn ghost" id="pg-assign">Assign selected</button>
+    <button class="btn" id="pg-export" style="margin-left:auto;background:var(--navy)">Export approved…</button>
+    <span id="pg-act-msg" style="align-self:center;font-size:12px;color:var(--sub)"></span>`;
+
+  function scoped(){
+    const ven=document.getElementById('pg-ven').value, reg=document.getElementById('pg-reg').value;
+    return queue.filter(p=>(!ven||p.vendor===ven)&&(!reg||p.climate===reg));
+  }
+  function visible(){
+    const s=scoped();
+    if(tab==='All') return s;
+    if(tab==='Assigned') return s.filter(p=>p.status==='Assigned');
+    return s.filter(p=>p.status===tab);
+  }
+  function kpis(){
+    const s=scoped();
+    const n=st=>s.filter(p=>p.status===st).length;
+    const $ =st=>s.filter(p=>p.status===st).reduce((a,p)=>a+p.cost,0);
+    document.getElementById('pg-kpis').innerHTML=[
+      ['Proposed store POs', fmtN(s.length), uniq(s.map(p=>p.vendor_id)).length+' master POs'],
+      ['Ready to approve', fmtN(n('Approved')), fmt$($('Approved')), n('Approved')?'good':''],
+      ['Delay / not yet', fmtN(n('Delay')), fmt$($('Delay')), ''],
+      ['Need a teammate', fmtN(n('Review')+n('Assigned')), n('Assigned')+' already assigned', (n('Review')+n('Assigned'))?'warn':''],
+      ['Exported', fmtN(n('Exported')), fmt$($('Exported')), n('Exported')?'good':''],
+    ].map(x=>`<div class="kpi ${x[3]||''}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+  }
+  function tabs(){
+    const s=scoped();
+    const counts={Approved:0,Delay:0,Review:0,Assigned:0,Exported:0,All:s.length};
+    s.forEach(p=>{ counts[p.status]=(counts[p.status]||0)+1; });
+    const labels=[['Approved','Approve'],['Delay','Delay'],['Review','Review'],['Assigned','Assigned'],['Exported','Exported'],['All','All']];
+    document.getElementById('pg-tabs').innerHTML=labels.map(([id,lab])=>
+      `<button data-t="${id}" class="${tab===id?'active':''}">${lab} <b>${counts[id]||0}</b></button>`).join('');
+    document.querySelectorAll('#pg-tabs button').forEach(b=>b.onclick=()=>{ tab=b.dataset.t; render(); });
+  }
+  function render(){
+    kpis(); tabs();
+    const rows=visible();
+    if(!rows.length){ document.getElementById('pg-tbl').innerHTML='<div class="loading">Nothing in this pile.</div>'; return; }
+    const head=`<th><input type="checkbox" id="pg-all"></th><th>Proposed PO</th><th>Vendor / store</th><th>Lines</th><th>Units</th><th>Est. cost</th><th>Cover (wks)</th><th>Why this pile</th><th>Owner</th><th>Status</th>`;
+    const body=rows.map(p=>`<tr data-id="${esc(p.id)}">
+      <td><input type="checkbox" class="pg-ck" ${p.sel?'checked':''}></td>
+      <td><span class="mono" style="font-size:11px">${esc(p.poId)}</span><br><span style="color:var(--sub)">${esc(p.master)}</span></td>
+      <td><b>${esc(p.vendor.split(' ')[0])}</b><br>${esc(p.store_id)} · ${esc(p.store_name)}</td>
+      <td class="num">${p.lines}</td>
+      <td class="num">${fmtN(p.units)}</td>
+      <td class="num">${fmt$(p.cost)}</td>
+      <td class="num">${p.wos>=99?'—':p.wos}</td>
+      <td style="font-size:11.5px;color:var(--sub);max-width:240px">${esc(p.why)}${p.note?' — '+esc(p.note):''}<br><span style="color:#93a1bb">${esc(p.sku.slice(0,2).join(' · '))}</span></td>
+      <td style="font-size:12px">${p.assignee?esc(TEAM.find(t=>t.id===p.assignee)?.name||p.assignee):'—'}</td>
+      <td>${statusChip(p.status)}</td>
+    </tr>`).join('');
+    document.getElementById('pg-tbl').innerHTML=`<div class="tblwrap" style="max-height:520px"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      <div class="legend"><span>Showing ${fmtN(rows.length)} of ${fmtN(scoped().length)} in scope · 4-week horizon, weather included (same math as Demand Planning).</span></div>`;
+    document.getElementById('pg-all').onchange=e=>{
+      const on=e.target.checked; rows.forEach(p=>p.sel=on); render();
+    };
+    document.querySelectorAll('#pg-tbl .pg-ck').forEach(ck=>{
+      ck.onchange=()=>{ const id=ck.closest('tr').dataset.id; const p=queue.find(x=>x.id===id); if(p) p.sel=ck.checked; };
+    });
+    if(exportOpen) drawExport();
+  }
+  function selected(){ return visible().filter(p=>p.sel); }
+  function act(fn, msg){
+    const rows=selected();
+    if(!rows.length){ document.getElementById('pg-act-msg').textContent='Select at least one PO.'; return; }
+    rows.forEach(fn); rows.forEach(p=>p.sel=false);
+    document.getElementById('pg-act-msg').textContent=msg(rows.length);
+    render();
+  }
+  document.getElementById('pg-apply').onclick=()=>{
+    const hits=scoped().filter(p=>p.status!=='Exported' && matchesRule(p, ruleId));
+    const r=RULES.find(x=>x.id===ruleId);
+    hits.forEach(p=>{ p.status=r.bucket; p.why=r.why; if(r.bucket!=='Assigned') p.assignee=''; });
+    document.getElementById('pg-rule-msg').textContent=`Moved ${fmtN(hits.length)} matching POs → ${r.bucket}.`;
+    tab=r.bucket; render();
+  };
+  document.getElementById('pg-reset').onclick=()=>{
+    scoped().filter(p=>p.status!=='Exported').forEach(p=>{ p.status=p.engine; p.why=p.engineWhy; p.assignee=''; p.note=''; p.sel=false; });
+    document.getElementById('pg-rule-msg').textContent='Restored engine recommendations.';
+    tab='Approved'; render();
+  };
+  document.getElementById('pg-approve').onclick=()=>act(p=>{ p.status='Approved'; p.why='Buyer approved'; }, n=>`Approved ${n}.`);
+  document.getElementById('pg-delay').onclick=()=>act(p=>{ p.status='Delay'; p.why='Held for next cycle'; p.assignee=''; }, n=>`Delayed ${n}.`);
+  document.getElementById('pg-assign').onclick=()=>{
+    const who=document.getElementById('pg-who').value, q=document.getElementById('pg-q').value.trim();
+    if(!who){ document.getElementById('pg-act-msg').textContent='Pick a teammate first.'; return; }
+    act(p=>{ p.status='Assigned'; p.assignee=who; p.note=q; p.why='Handed off — '+q; }, n=>`Assigned ${n} to ${TEAM.find(t=>t.id===who).name}.`);
+    tab='Assigned'; render();
+  };
+  document.getElementById('pg-ven').onchange=render;
+  document.getElementById('pg-reg').onchange=render;
+
+  const EXPORTS=[
+    {id:'csv', title:'NetSuite CSV import', tag:'Download → upload',
+      blurb:'Standard Purchase Order CSV (custom record or Transactions > Import CSV). Buyer downloads, merch ops drops it on the NetSuite CSV import saved map for Vendor Bill / Purchase Order. Fastest path for a demo and for vendors without EDI.',
+      file:'WW_NetSuite_PO_import.csv', kind:'csv'},
+    {id:'edi', title:'EDI X12 850 (SPS Commerce)', tag:'Standard report form',
+      blurb:'Purchase Order 850 through the existing SPS pipe used for Carhartt / Wolverine 846. One interchange per master PO; store mini-POs as N1/PO1 loops. NetSuite consumes the 855 ack on the way back.',
+      file:'WW_PO_850.edi.txt', kind:'edi'},
+    {id:'api', title:'NetSuite REST / SuiteTalk', tag:'System-to-system',
+      blurb:'POST purchaseOrder (REST) or upsert via SOAP. Token-based auth from this app\'s service principal. Best when POs should land without a file landing zone — still human-approved in this queue first.',
+      file:'WW_NetSuite_PO_payload.json', kind:'json'},
+    {id:'cabinet', title:'File Cabinet + Map/Reduce', tag:'NetSuite-native job',
+      blurb:'Drop a delimited file in the NetSuite File Cabinet; a scheduled Map/Reduce (or SuiteFlow) picks it up, creates POs, and writes a results file back. Fits IT-owned integration calendars.',
+      file:'WW_FileCabinet_PO.txt', kind:'csv'},
+    {id:'xlsx', title:'Excel buyer packet', tag:'Review then import',
+      blurb:'Workbook merchandising already lives in: one sheet per vendor master PO, store tabs, MOQ flags. After sign-off, Save As CSV and use the same NetSuite import map as option 1.',
+      file:'WW_buyer_packet.csv', kind:'csv'},
+    {id:'portal', title:'Vendor portal / 3PL pack', tag:'When they will not take 850',
+      blurb:'Some brands only take a portal spreadsheet or a 3PL ASN-ready pack. Same store×SKU qty, different envelope. NetSuite still gets a PO via CSV or API so 3-way match has a header to land on.',
+      file:'WW_vendor_portal_pack.csv', kind:'csv'},
+  ];
+
+  function approvedRows(){ return scoped().filter(p=>p.status==='Approved'); }
+  function csvFor(rows){
+    const cols=['externalid','vendor','store_id','store_name','master_po','qty','amount','expected_receipt','lead_days','memo'];
+    const body=rows.map(p=>[p.poId,`"${p.vendor}"`,p.store_id,`"${p.store_name}"`,p.master,p.units,p.cost.toFixed(2),String(p.receipt).slice(0,10),p.lead,`"${(p.why||'').replace(/"/g,'')} ${p.tier||''}"`].join(','));
+    return [cols.join(',')].concat(body).join('\n');
+  }
+  function ediFor(rows){
+    const byVen={};
+    rows.forEach(p=>{ (byVen[p.vendor]=byVen[p.vendor]||[]).push(p); });
+    const parts=['ISA*00*          *00*          *ZZ*WORKWORLD     *ZZ*NETSUITE      *260714*1200*U*00401*000000001*0*P*>~',
+      'GS*PO*WORKWORLD*NETSUITE*20260714*1200*1*X*004010~'];
+    let i=1;
+    Object.entries(byVen).forEach(([ven,ps])=>{
+      parts.push(`ST*850*${String(i).padStart(4,'0')}~`);
+      parts.push(`BEG*00*SA*${ps[0].master}*20260714~`);
+      parts.push(`N1*VN*${ven}~`);
+      ps.forEach(p=>parts.push(`PO1**${p.units}*EA***VN*${p.poId}*ST*${p.store_id}~`));
+      parts.push(`CTT*${ps.length}~`);
+      parts.push(`SE*${6+ps.length}*${String(i).padStart(4,'0')}~`);
+      i++;
+    });
+    parts.push('GE*1*1~','IEA*1*000000001~');
+    return parts.join('\n');
+  }
+  function jsonFor(rows){
+    return JSON.stringify({source:'ww-merch-ops',anchor:ANCHOR,recordType:'purchaseOrder',
+      orders:rows.map(p=>({externalId:p.poId, vendor:p.vendor, location:p.store_id, memo:p.master,
+        expectedReceipt:String(p.receipt).slice(0,10), quantity:p.units, amount:+p.cost.toFixed(2)}))}, null, 2);
+  }
+  function payload(m, rows){
+    if(m.kind==='edi') return ediFor(rows);
+    if(m.kind==='json') return jsonFor(rows);
+    return csvFor(rows);
+  }
+  function drawExport(){
+    const card=document.getElementById('pg-export-card');
+    card.style.display='';
+    const n=approvedRows().length;
+    document.getElementById('pg-export-grid').innerHTML=EXPORTS.map(m=>`
+      <button class="export-card ${exportMethod===m.id?'on':''}" data-x="${m.id}">
+        <div class="xtag">${esc(m.tag)}</div>
+        <h4>${esc(m.title)}</h4>
+        <p>${esc(m.blurb)}</p>
+      </button>`).join('') +
+      `<div class="export-card muted"><div class="xtag">Same payload</div><h4>${fmtN(n)} approved store POs</h4>
+        <p>Pick a path. The file is generated from the Approve pile only — delayed and assigned rows stay in this app until someone acts.</p></div>`;
+    document.querySelectorAll('#pg-export-grid .export-card[data-x]').forEach(b=>b.onclick=()=>{
+      exportMethod=b.dataset.x; previewExport();
+      document.querySelectorAll('#pg-export-grid .export-card').forEach(x=>x.classList.toggle('on', x.dataset.x===exportMethod));
+    });
+    if(exportMethod) previewExport();
+    else document.getElementById('pg-export-preview').innerHTML='<div class="hint" style="margin-top:12px">Select a path to preview the file NetSuite (or SPS) would ingest.</div>';
+  }
+  function previewExport(){
+    const m=EXPORTS.find(x=>x.id===exportMethod);
+    const rows=approvedRows();
+    const body=payload(m, rows);
+    const mime=m.kind==='json'?'application/json': m.kind==='edi'?'text/plain':'text/csv';
+    document.getElementById('pg-export-preview').innerHTML=`
+      <div class="export-preview">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <b>${esc(m.title)}</b>
+          <span class="chip blue">${fmtN(rows.length)} POs</span>
+          <button class="btn" id="pg-dl">Download ${esc(m.file)}</button>
+          <button class="btn ghost" id="pg-mark">Mark pile as exported</button>
+          <span id="pg-xmsg" style="font-size:12px;color:var(--sub)"></span>
+        </div>
+        <pre class="sqlbox" style="display:block;max-height:220px;overflow:auto">${esc(body.slice(0,3500))}${body.length>3500?'\n…':''}</pre>
+      </div>`;
+    document.getElementById('pg-dl').onclick=()=>{
+      try{
+        const blob=new Blob([body],{type:mime}); const a=document.createElement('a');
+        a.href=URL.createObjectURL(blob); a.download=m.file; a.click();
+        document.getElementById('pg-xmsg').textContent='Downloaded — drop this on the NetSuite / SPS side (demo file).';
+      }catch(e){ document.getElementById('pg-xmsg').textContent='Download blocked in this view.'; }
+    };
+    document.getElementById('pg-mark').onclick=()=>{
+      rows.forEach(p=>{ p.status='Exported'; p.why='Sent via '+m.title; p.sel=false; });
+      document.getElementById('pg-xmsg').textContent='Approved pile marked exported. Delayed / assigned rows remain.';
+      tab='Exported'; render();
+    };
+  }
+  document.getElementById('pg-export').onclick=()=>{
+    if(!approvedRows().length){ document.getElementById('pg-act-msg').textContent='Nothing in Approve yet.'; return; }
+    exportOpen=true; drawExport();
+    document.getElementById('pg-export-card').scrollIntoView({behavior:'smooth', block:'start'});
+  };
+  render();
+},
+
 async ats(){
   const rows=await runQ(`SELECT * FROM ${S}.ats_coverage_v ORDER BY items_reported DESC`);
   document.getElementById('ats-tbl').innerHTML='<h3>Coverage by vendor — latest snapshot</h3><div class="hint">Crossref match rate is the health metric: unmatched vendor SKUs can\'t inform ordering.</div>'+table(rows,[
@@ -1084,17 +1603,283 @@ async match(){
     {h:'Open exc',f:r=>+r.open_exceptions?`${r.open_exceptions} · ${fmt$(r.open_exception_amt)}`:'—',num:1},
     {h:'Due',f:r=>`${String(r.last_due).slice(0,10)}`},
     {h:'Status',f:r=>`<span class="chip ${r.recon_status==='Clear to pay'?'green':r.recon_status==='Pay less debit memos'?'blue':'red'}">${esc(r.recon_status)}</span>`}]);
-  const rows=await runQ(`SELECT * FROM ${S}.exception_queue_v ORDER BY variance_amount DESC LIMIT 25`);
-  document.getElementById('m-tbl').innerHTML=table(rows,[
-    {h:'PO / Invoice',f:r=>`<span class="mono" style="font-size:11px">${esc(r.po_id)}<br>${esc(r.invoice_id)}</span>`},
-    {h:'Vendor',f:r=>`<b>${esc(r.vendor_name)}</b><br><span style="color:var(--sub)">${esc(r.store_id)}</span>`},
-    {h:'Item',f:r=>`${esc(r.brand??'')} ${esc(r.style_name??'')} <span style="color:var(--sub)">${esc(r.size??'')}</span>`},
-    {h:'Cause',f:r=>statusChip(r.variance_type)},
-    {h:'$',f:r=>fmt$(r.variance_amount),num:1},
-    {h:'Age',f:r=>r.age_days+'d',num:1},
-    {h:'AI resolution',f:r=>`<span style="font-size:11.5px">${esc(r.ai_suggested_resolution)}</span>`},
-    {h:'Status',f:r=>statusChip(r.status)}]);
+  const rows=await runQ(`SELECT * FROM ${S}.exception_queue_v`);
+  const byType={};
+  rows.forEach(r=>{ const k=r.variance_type||'Other'; byType[k]=byType[k]||{type:k,n:0,amt:0,old:0}; byType[k].n++; byType[k].amt+=+r.variance_amount; if(+r.age_days>=30) byType[k].old++; });
+  const types=Object.values(byType).sort((a,b)=>b.amt-a.amt);
+  document.getElementById('m-tbl').innerHTML=table(types,[
+    {h:'Cause',f:r=>statusChip(r.type)},
+    {h:'Open lines',f:r=>fmtN(r.n),num:1},
+    {h:'Open $',f:r=>fmt$(r.amt),num:1},
+    {h:'Aged 30d+',f:r=>r.old?`<span style="color:var(--red);font-weight:700">${r.old}</span>`:'—',num:1}])
+    + `<div style="margin-top:12px"><button class="btn" onclick="show('matchq')">Open Exception triage →</button>
+      <span style="margin-left:10px;font-size:12px;color:var(--sub)">${fmtN(rows.length)} lines still need a clear / debit / hold decision in NetSuite.</span></div>`;
 },
+
+async matchq(){
+  let rows=[];
+  try{ rows=await runQ(`SELECT * FROM ${S}.exception_queue_v ORDER BY variance_amount DESC`); }
+  catch(e){
+    rows=[
+      {match_id:'M-1001',po_id:'PO-S01-V001-07',invoice_id:'INV-4412',vendor_name:'Carhartt',store_id:'S01',brand:'Carhartt',style_name:'Dungaree Jacket',size:'L',variance_type:'PriceVariance',variance_amount:'18.40',age_days:'6',ai_suggested_resolution:'Accept — under $25 tolerance',status:'PendingReview'},
+      {match_id:'M-1002',po_id:'PO-S04-V002-07',invoice_id:'INV-4480',vendor_name:'Wolverine',store_id:'S04',brand:'Wolverine',style_name:'Steel Toe',size:'10',variance_type:'QtyShort',variance_amount:'192.00',age_days:'11',ai_suggested_resolution:'Issue debit memo for 2 units short-shipped',status:'PendingReview'},
+      {match_id:'M-1003',po_id:'PO-S12-V001-07',invoice_id:'INV-4419',vendor_name:'Carhartt',store_id:'S12',brand:'Carhartt',style_name:'Work Pant',size:'32x32',variance_type:'Freight',variance_amount:'64.50',age_days:'22',ai_suggested_resolution:'Confirm FOB terms before debiting freight',status:'PendingReview'},
+      {match_id:'M-1004',po_id:'PO-S08-V012-06',invoice_id:'INV-3901',vendor_name:'Helly Hansen',store_id:'S08',brand:'Helly Hansen',style_name:'Rain Jacket',size:'XL',variance_type:'PriceVariance',variance_amount:'740.00',age_days:'38',ai_suggested_resolution:'Material price variance — buyer + AP jointly',status:'PendingReview'},
+      {match_id:'M-1005',po_id:'PO-S18-V006-07',invoice_id:'INV-4502',vendor_name:'Dickies',store_id:'S18',brand:'Dickies',style_name:'Coverall',size:'L',variance_type:'QtyShort',variance_amount:'114.00',age_days:'9',ai_suggested_resolution:'Debit 3 units; receiver shows short',status:'DebitMemoSent'},
+      {match_id:'M-1006',po_id:'PO-S22-V008-07',invoice_id:'INV-4555',vendor_name:'Red Kap',store_id:'S22',brand:'Red Kap',style_name:'Work Shirt',size:'L',variance_type:'Freight',variance_amount:'12.00',age_days:'4',ai_suggested_resolution:'Write off freight under tolerance',status:'PendingReview'},
+      {match_id:'M-1007',po_id:'PO-S09-V001-06',invoice_id:'INV-4010',vendor_name:'Carhartt',store_id:'S09',brand:'Carhartt',style_name:'Beanie',size:'OS',variance_type:'CostVariance',variance_amount:'310.00',age_days:'41',ai_suggested_resolution:'Hold statement — receiver not posted',status:'PendingReview'},
+      {match_id:'M-1008',po_id:'PO-S31-V002-07',invoice_id:'INV-4601',vendor_name:'Wolverine',store_id:'S31',brand:'Wolverine',style_name:'Hiker',size:'9',variance_type:'PriceVariance',variance_amount:'22.80',age_days:'3',ai_suggested_resolution:'Accept — catalog vs PO rounding',status:'PendingReview'},
+    ];
+    document.getElementById('mx-kpis').insertAdjacentHTML('beforebegin',
+      '<div class="warnbox">Warehouse not reachable — showing a sample exception queue so you can walk clear / debit / hold / assign / NetSuite post.</div>');
+  }
+  const TEAM=[
+    {id:'ap', name:'Chris Nguyen', role:'AP specialist'},
+    {id:'buyer', name:'Maya Chen', role:'Buyer — Carhartt / Wolverine'},
+    {id:'stores', name:'Jordan Hale', role:'Regional merch (receivers)'},
+    {id:'vendor', name:'Priya Shah', role:'Vendor ops / EDI'},
+  ];
+  const RULES=[
+    {id:'tol', label:'Absolute variance under $25', bucket:'Clear', why:'Policy tolerance — write off / accept the bill'},
+    {id:'short', label:'Qty short (or AI already says debit)', bucket:'Debit', why:'Recoverable — vendor credit / debit memo'},
+    {id:'aged', label:'Aged 30+ days and over $500', bucket:'Review', why:'Material and stale — AP + buyer together'},
+    {id:'freight', label:'Freight over tolerance', bucket:'Review', why:'Often contractual — confirm FOB before debiting'},
+    {id:'inflight', label:'Debit memo already sent', bucket:'Debit', why:'Confirm the credit landed in NetSuite AP'},
+  ];
+  function rec(r){
+    const amt=Math.abs(+r.variance_amount), age=+r.age_days, t=String(r.variance_type||''), ai=String(r.ai_suggested_resolution||'').toLowerCase();
+    if(r.status==='DebitMemoSent') return {bucket:'Debit', why:'Debit memo already issued'};
+    if(amt<25) return {bucket:'Clear', why:'Under $25 tolerance'};
+    if(/qty|short/i.test(t) || /debit|short-ship|short ship/i.test(ai)) return {bucket:'Debit', why:'Qty/cost recovery'};
+    if(age>=30 && amt>500) return {bucket:'Review', why:'Aged and material'};
+    if(/freight/i.test(t)) return {bucket:'Review', why:'Confirm freight terms'};
+    if(/hold|receiver/i.test(ai)) return {bucket:'Hold', why:'Docs still catching up'};
+    return {bucket:'Review', why:'Needs a human call'};
+  }
+  function matchesRule(r, id){
+    const amt=Math.abs(+r.variance_amount), age=+r.age_days, t=String(r.variance_type||''), ai=String(r.ai_suggested_resolution||'').toLowerCase();
+    if(id==='tol') return amt<25;
+    if(id==='short') return /qty|short/i.test(t) || /debit|short/i.test(ai);
+    if(id==='aged') return age>=30 && amt>500;
+    if(id==='freight') return /freight/i.test(t) && amt>=25;
+    if(id==='inflight') return r.status==='DebitMemoSent';
+    return false;
+  }
+  const queue=rows.map((r,i)=>{
+    const recd=rec(r);
+    return {...r, id:r.match_id||('EX-'+i), amt:+r.variance_amount, engine:recd.bucket, engineWhy:recd.why,
+      pile:recd.bucket, why:recd.why, assignee:'', note:'', sel:false};
+  });
+  let tab='Clear', ruleId='tol', exportOpen=false, exportMethod=null;
+
+  document.getElementById('mx-rule-controls').innerHTML=`
+    <div><label>Vendor</label><select id="mx-ven"><option value="">All vendors</option>${uniq(queue.map(p=>p.vendor_name)).sort().map(c=>`<option>${c}</option>`).join('')}</select></div>
+    <div><label>Cause</label><select id="mx-cause"><option value="">All causes</option>${uniq(queue.map(p=>p.variance_type)).sort().map(c=>`<option>${c}</option>`).join('')}</select></div>`;
+  document.getElementById('mx-rules').innerHTML=RULES.map(r=>`
+    <label class="pg-rule"><input type="radio" name="mx-rule" value="${r.id}" ${r.id===ruleId?'checked':''}>
+      <span><b>${esc(r.label)}</b> → ${statusChip(r.bucket)}<br><span class="why">${esc(r.why)}</span></span></label>`).join('');
+  document.querySelectorAll('input[name="mx-rule"]').forEach(i=>i.onchange=()=>{ ruleId=i.value; });
+  document.getElementById('mx-queue-controls').innerHTML=`
+    <div><label>Assign to</label><select id="mx-who"><option value="">Choose teammate…</option>${TEAM.map(t=>`<option value="${t.id}">${esc(t.name)} — ${esc(t.role)}</option>`).join('')}</select></div>
+    <div style="flex:1;min-width:180px"><label>Question / note</label><input id="mx-q" placeholder="e.g. Receiver posted in store but not in NS?" style="border:1px solid #C9D6EC;border-radius:8px;padding:6px 8px;font-size:12.5px;width:100%"></div>`;
+  document.getElementById('mx-actions').innerHTML=`
+    <button class="btn" id="mx-clear">Clear selected (write off / accept)</button>
+    <button class="btn ghost" id="mx-debit">Debit selected</button>
+    <button class="btn ghost" id="mx-hold">Hold pay-file</button>
+    <button class="btn ghost" id="mx-assign">Assign selected</button>
+    <button class="btn" id="mx-export" style="margin-left:auto;background:var(--navy)">Post to NetSuite…</button>
+    <span id="mx-act-msg" style="align-self:center;font-size:12px;color:var(--sub)"></span>`;
+
+  function scoped(){
+    const ven=document.getElementById('mx-ven').value, cause=document.getElementById('mx-cause').value;
+    return queue.filter(p=>(!ven||p.vendor_name===ven)&&(!cause||p.variance_type===cause));
+  }
+  function visible(){
+    const s=scoped();
+    if(tab==='All') return s;
+    if(tab==='Assigned') return s.filter(p=>p.pile==='Assigned');
+    return s.filter(p=>p.pile===tab);
+  }
+  function kpis(){
+    const s=scoped();
+    const n=st=>s.filter(p=>p.pile===st).length;
+    const $=st=>s.filter(p=>p.pile===st).reduce((a,p)=>a+p.amt,0);
+    document.getElementById('mx-kpis').innerHTML=[
+      ['Open exceptions', fmtN(s.filter(p=>p.pile!=='Posted').length), fmt$(s.filter(p=>p.pile!=='Posted').reduce((a,p)=>a+p.amt,0))+' in play'],
+      ['Clear / accept', fmtN(n('Clear')), fmt$($('Clear')), n('Clear')?'good':''],
+      ['Debit / recover', fmtN(n('Debit')), fmt$($('Debit')), n('Debit')?'good':''],
+      ['Hold pay-file', fmtN(n('Hold')), fmt$($('Hold')), n('Hold')?'warn':''],
+      ['Need a teammate', fmtN(n('Review')+n('Assigned')), n('Assigned')+' already assigned', (n('Review')+n('Assigned'))?'warn':''],
+      ['Posted to NS', fmtN(n('Posted')), fmt$($('Posted')), n('Posted')?'good':''],
+    ].map(x=>`<div class="kpi ${x[3]||''}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+  }
+  function tabs(){
+    const s=scoped();
+    const counts={Clear:0,Debit:0,Hold:0,Review:0,Assigned:0,Posted:0,All:s.length};
+    s.forEach(p=>{ counts[p.pile]=(counts[p.pile]||0)+1; });
+    const labels=[['Clear','Clear'],['Debit','Debit'],['Hold','Hold'],['Review','Review'],['Assigned','Assigned'],['Posted','Posted'],['All','All']];
+    document.getElementById('mx-tabs').innerHTML=labels.map(([id,lab])=>
+      `<button data-t="${id}" class="${tab===id?'active':''}">${lab} <b>${counts[id]||0}</b></button>`).join('');
+    document.querySelectorAll('#mx-tabs button').forEach(b=>b.onclick=()=>{ tab=b.dataset.t; render(); });
+  }
+  function render(){
+    kpis(); tabs();
+    const vis=visible();
+    if(!vis.length){ document.getElementById('mx-tbl').innerHTML='<div class="loading">Nothing in this pile.</div>'; return; }
+    const head=`<th><input type="checkbox" id="mx-all"></th><th>PO / Invoice</th><th>Vendor / store</th><th>Item</th><th>Cause</th><th>$</th><th>Age</th><th>Why this pile</th><th>Owner</th><th>Status</th>`;
+    const body=vis.map(p=>`<tr data-id="${esc(p.id)}">
+      <td><input type="checkbox" class="mx-ck" ${p.sel?'checked':''}></td>
+      <td><span class="mono" style="font-size:11px">${esc(p.po_id)}<br>${esc(p.invoice_id)}</span></td>
+      <td><b>${esc((p.vendor_name||'').split(' ')[0])}</b><br><span style="color:var(--sub)">${esc(p.store_id)}</span></td>
+      <td>${esc(p.brand||'')} ${esc(p.style_name||'')} <span style="color:var(--sub)">${esc(p.size||'')}</span></td>
+      <td>${statusChip(p.variance_type)}</td>
+      <td class="num">${fmt$(p.amt)}</td>
+      <td class="num">${p.age_days}d</td>
+      <td style="font-size:11.5px;color:var(--sub);max-width:240px">${esc(p.why)}${p.note?' — '+esc(p.note):''}<br><span style="color:#93a1bb">${esc(p.ai_suggested_resolution||'')}</span></td>
+      <td style="font-size:12px">${p.assignee?esc(TEAM.find(t=>t.id===p.assignee)?.name||p.assignee):'—'}</td>
+      <td>${statusChip(p.pile)}</td>
+    </tr>`).join('');
+    document.getElementById('mx-tbl').innerHTML=`<div class="tblwrap" style="max-height:520px"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      <div class="legend"><span>Showing ${fmtN(vis.length)} of ${fmtN(scoped().length)} in scope · a posted line is a NetSuite vendor bill / credit / pay-file flag, not a chart refresh.</span></div>`;
+    document.getElementById('mx-all').onchange=e=>{ const on=e.target.checked; vis.forEach(p=>p.sel=on); render(); };
+    document.querySelectorAll('#mx-tbl .mx-ck').forEach(ck=>{
+      ck.onchange=()=>{ const id=ck.closest('tr').dataset.id; const p=queue.find(x=>x.id===id); if(p) p.sel=ck.checked; };
+    });
+    if(exportOpen) drawExport();
+  }
+  function selected(){ return visible().filter(p=>p.sel); }
+  function act(fn, msg){
+    const pick=selected();
+    if(!pick.length){ document.getElementById('mx-act-msg').textContent='Select at least one exception.'; return; }
+    pick.forEach(fn); pick.forEach(p=>p.sel=false);
+    document.getElementById('mx-act-msg').textContent=msg(pick.length);
+    render();
+  }
+  document.getElementById('mx-apply').onclick=()=>{
+    const hits=scoped().filter(p=>p.pile!=='Posted' && matchesRule(p, ruleId));
+    const r=RULES.find(x=>x.id===ruleId);
+    hits.forEach(p=>{ p.pile=r.bucket; p.why=r.why; if(r.bucket!=='Assigned') p.assignee=''; });
+    document.getElementById('mx-rule-msg').textContent=`Moved ${fmtN(hits.length)} matching lines → ${r.bucket}.`;
+    tab=r.bucket; render();
+  };
+  document.getElementById('mx-reset').onclick=()=>{
+    scoped().filter(p=>p.pile!=='Posted').forEach(p=>{ p.pile=p.engine; p.why=p.engineWhy; p.assignee=''; p.note=''; p.sel=false; });
+    document.getElementById('mx-rule-msg').textContent='Restored engine recommendations.';
+    tab='Clear'; render();
+  };
+  document.getElementById('mx-clear').onclick=()=>act(p=>{ p.pile='Clear'; p.why='AP cleared — accept / write off'; }, n=>`Cleared ${n}.`);
+  document.getElementById('mx-debit').onclick=()=>act(p=>{ p.pile='Debit'; p.why='Recover with vendor credit'; }, n=>`Marked ${n} for debit.`);
+  document.getElementById('mx-hold').onclick=()=>act(p=>{ p.pile='Hold'; p.why='Keep off the pay file'; p.assignee=''; }, n=>`Held ${n}.`);
+  document.getElementById('mx-assign').onclick=()=>{
+    const who=document.getElementById('mx-who').value, q=document.getElementById('mx-q').value.trim();
+    if(!who){ document.getElementById('mx-act-msg').textContent='Pick a teammate first.'; return; }
+    act(p=>{ p.pile='Assigned'; p.assignee=who; p.note=q; p.why='Handed off — '+q; }, n=>`Assigned ${n} to ${TEAM.find(t=>t.id===who).name}.`);
+    tab='Assigned'; render();
+  };
+  document.getElementById('mx-ven').onchange=render;
+  document.getElementById('mx-cause').onchange=render;
+
+  const EXPORTS=[
+    {id:'billcsv', title:'Vendor bill variance CSV', tag:'Download → NetSuite import',
+      blurb:'Custom transaction CSV against vendor bill / item receipt. Cleared lines post as write-offs or accepted variances; debit lines as vendor credits. Fastest path for AP that already runs a saved CSV map.',
+      file:'WW_NS_bill_variance.csv', kind:'csv'},
+    {id:'rest', title:'NetSuite REST vendorBill / vendorCredit', tag:'System-to-system',
+      blurb:'PATCH the bill, POST vendorCredit for debit memos, flag the payment hold. Token auth from this app. Human-approved in the queue first — the API is the last mile, not the decision.',
+      file:'WW_NS_exception_payload.json', kind:'json'},
+    {id:'edi812', title:'EDI X12 812 Credit/Debit Adjustment', tag:'Standard report form',
+      blurb:'For Tier A vendors already on SPS. 812 (or 820 remittance advice with adjustment) so Carhartt / Wolverine see the same debit we posted in NetSuite. Closes the loop the 846/850 pipe started.',
+      file:'WW_debit_812.edi.txt', kind:'edi'},
+    {id:'cabinet', title:'File Cabinet + Map/Reduce', tag:'NetSuite-native job',
+      blurb:'Drop the exception file; scheduled script creates credits, applies them to open bills, and writes a results CSV back. Fits IT-owned close calendars.',
+      file:'WW_FileCabinet_exceptions.txt', kind:'csv'},
+    {id:'payfile', title:'Pay-file hold report', tag:'Treasury / AP check run',
+      blurb:'Statements on Hold stay off the check run. Clear-to-pay and pay-less-debits export as the NetSuite payment batch exception report. This is how analysis becomes “we did not overpay.”',
+      file:'WW_payfile_holds.csv', kind:'csv'},
+    {id:'pack', title:'Vendor debit packet', tag:'Portal / email pack',
+      blurb:'PDF-ready CSV: PO, invoice, qty/cost delta, receiver. For vendors who will not take 812. NetSuite still gets the credit via CSV or REST so 3-way match has a closed line.',
+      file:'WW_vendor_debit_pack.csv', kind:'csv'},
+  ];
+  function postable(){ return scoped().filter(p=>p.pile==='Clear'||p.pile==='Debit'||p.pile==='Hold'); }
+  function csvFor(list){
+    const cols=['match_id','action','po_id','invoice_id','vendor','store_id','sku','variance_type','amount','age_days','memo'];
+    return [cols.join(',')].concat(list.map(p=>[p.id,p.pile,p.po_id,p.invoice_id,`"${p.vendor_name}"`,p.store_id,
+      `"${(p.brand||'')+' '+(p.style_name||'')+' '+(p.size||'')}"`,p.variance_type,p.amt.toFixed(2),p.age_days,`"${(p.why||'').replace(/"/g,'')}"`].join(','))).join('\n');
+  }
+  function jsonFor(list){
+    return JSON.stringify({source:'ww-merch-ops',anchor:ANCHOR, closeQueue:list.map(p=>({
+      matchId:p.id, action:p.pile, po:p.po_id, invoice:p.invoice_id, vendor:p.vendor_name, amount:+p.amt.toFixed(2),
+      netsuite: p.pile==='Clear'?'vendorBill.variance.accept': p.pile==='Debit'?'vendorCredit': 'vendorBill.paymentHold'
+    }))}, null, 2);
+  }
+  function ediFor(list){
+    const debits=list.filter(p=>p.pile==='Debit');
+    const parts=['ISA*00*          *00*          *ZZ*WORKWORLD     *ZZ*NETSUITE      *260714*1200*U*00401*000000002*0*P*>~',
+      'GS*CD*WORKWORLD*NETSUITE*20260714*1200*2*X*004010~','ST*812*0001~','BCD*20260714*WW-DBT-0714*00*C~'];
+    debits.forEach(p=>parts.push(`CDD*01*${p.amt.toFixed(2)}**PO*${p.po_id}*IV*${p.invoice_id}~`));
+    parts.push('SE*'+(4+debits.length)+'*0001~','GE*1*2~','IEA*1*000000002~');
+    return parts.join('\n');
+  }
+  function payload(m, list){
+    if(m.kind==='edi') return ediFor(list);
+    if(m.kind==='json') return jsonFor(list);
+    return csvFor(list);
+  }
+  function drawExport(){
+    const card=document.getElementById('mx-export-card');
+    card.style.display='';
+    const n=postable().length;
+    document.getElementById('mx-export-grid').innerHTML=EXPORTS.map(m=>`
+      <button class="export-card ${exportMethod===m.id?'on':''}" data-x="${m.id}">
+        <div class="xtag">${esc(m.tag)}</div>
+        <h4>${esc(m.title)}</h4>
+        <p>${esc(m.blurb)}</p>
+      </button>`).join('')+
+      `<div class="export-card muted"><div class="xtag">Same payload</div><h4>${fmtN(n)} decided lines</h4>
+        <p>Clear + Debit + Hold only. Review and assigned stay here until someone acts. Posted lines are the operational effect — NetSuite AP and the pay file change.</p></div>`;
+    document.querySelectorAll('#mx-export-grid .export-card[data-x]').forEach(b=>b.onclick=()=>{
+      exportMethod=b.dataset.x; previewExport();
+      document.querySelectorAll('#mx-export-grid .export-card').forEach(x=>x.classList.toggle('on', x.dataset.x===exportMethod));
+    });
+    if(exportMethod) previewExport();
+    else document.getElementById('mx-export-preview').innerHTML='<div class="hint" style="margin-top:12px">Select a path to preview what NetSuite (or SPS / treasury) would ingest.</div>';
+  }
+  function previewExport(){
+    const m=EXPORTS.find(x=>x.id===exportMethod);
+    const list=postable();
+    const body=payload(m, list);
+    const mime=m.kind==='json'?'application/json': m.kind==='edi'?'text/plain':'text/csv';
+    document.getElementById('mx-export-preview').innerHTML=`
+      <div class="export-preview">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+          <b>${esc(m.title)}</b>
+          <span class="chip blue">${fmtN(list.length)} lines</span>
+          <button class="btn" id="mx-dl">Download ${esc(m.file)}</button>
+          <button class="btn ghost" id="mx-mark">Mark as posted in NetSuite</button>
+          <span id="mx-xmsg" style="font-size:12px;color:var(--sub)"></span>
+        </div>
+        <pre class="sqlbox" style="display:block;max-height:220px;overflow:auto">${esc(body.slice(0,3500))}${body.length>3500?'\n…':''}</pre>
+      </div>`;
+    document.getElementById('mx-dl').onclick=()=>{
+      try{
+        const blob=new Blob([body],{type:mime}); const a=document.createElement('a');
+        a.href=URL.createObjectURL(blob); a.download=m.file; a.click();
+        document.getElementById('mx-xmsg').textContent='Downloaded — AP drops this on the NetSuite / SPS side (demo file).';
+      }catch(e){ document.getElementById('mx-xmsg').textContent='Download blocked in this view.'; }
+    };
+    document.getElementById('mx-mark').onclick=()=>{
+      list.forEach(p=>{ p.pile='Posted'; p.why='Posted via '+m.title; p.sel=false; });
+      document.getElementById('mx-xmsg').textContent='Clear / debit / hold marked posted. Review rows remain.';
+      tab='Posted'; render();
+    };
+  }
+  document.getElementById('mx-export').onclick=()=>{
+    if(!postable().length){ document.getElementById('mx-act-msg').textContent='Nothing in Clear, Debit, or Hold yet.'; return; }
+    exportOpen=true; drawExport();
+    document.getElementById('mx-export-card').scrollIntoView({behavior:'smooth', block:'start'});
+  };
+  render();
+},
+
 async markdown(){
   const season=await runQ(`SELECT * FROM ${S}.markdown_season_v ORDER BY week_start`);
   const ladder=await runQ(`SELECT * FROM ${S}.markdown_ladder_v ORDER BY style_id, step_no`);
@@ -1162,6 +1947,26 @@ async markdown(){
     {h:'Workflow',f:r=>`<span class="chip ${({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[r.workflow_state]||'gray'}">${esc(r.workflow_state)}</span>`},
     {h:'Labels',f:r=>r.label_file_generated==='true'?'<span class="chip green">Generated</span>':'<span class="chip gray">Pending</span>'},
     {h:'Store tasks',f:r=>+r.tasks_total?`${r.tasks_done}/${r.tasks_total} done`+(+r.tasks_overdue?` · <span style="color:var(--red);font-weight:700">${r.tasks_overdue} overdue</span>`:''):'—'}]);
+  bindAiBuild('aib-md',{
+    defaultScope:'markdown',
+    title:'Score this season — then say what to change',
+    hint:'Markdown efficacy is a test, not a vibe. AI Build rates the ladder against sell-through, the floor, and experiments, then writes the next three actions.',
+    placeholder:'e.g. Should we skip step 2 on rainwear, or is execution the real leak?',
+    chips:['Rate rainwear markdown efficacy','Are we marking down on the calendar or on sell-through?','What should change before the next ladder step?'],
+    facts:()=>({
+      sellThrough: last? +last.cum_sell_through_pct : null,
+      cumUnits: last? +last.cum_units : null,
+      estSupply: last? +last.est_season_supply : null,
+      floorBreaches,
+      policiesActive: pols.filter(p=>p.status==='Active').length,
+      policiesTesting: pols.filter(p=>p.status==='Testing').length,
+      expDecision: (exps[0]||{}).decision,
+      expHypothesis: (exps[0]||{}).hypothesis,
+      evtOverdue, taskOverdue,
+      stepsFired: steps.map(r=>({week:String(r.week_start).slice(0,10), step:r.markdown_step, sell:r.cum_sell_through_pct})),
+      overdueEvents: evts.filter(r=>r.workflow_state==='OVERDUE - not staged').map(r=>({id:r.event_id, scope:r.scope}))
+    })
+  });
 },
 async pricing(){
   const pipe=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v ORDER BY effective_date`);
@@ -1218,6 +2023,36 @@ async pricing(){
     {h:'Tier',k:'sophistication'},
     {h:'Ingestion method',f:r=>`<span class="chip ${r.sophistication==='Tier A'?'green':r.sophistication==='Tier B'?'blue':'orange'}">${esc(r.method)}</span>`},
     {h:'Vendors',k:'n',num:1}]);
+  let mdLast=null, mdFloor=0, mdExps=[];
+  try{
+    const season=await runQ(`SELECT * FROM ${S}.markdown_season_v ORDER BY week_start`);
+    mdLast=season[season.length-1]||null;
+    const lad=await runQ(`SELECT count(*) n FROM ${S}.markdown_ladder_v WHERE below_floor='true'`);
+    mdFloor=+(lad[0]&&lad[0].n||0);
+    mdExps=await runQ(`SELECT decision, hypothesis FROM ${S}.experiments WHERE lower(hypothesis) LIKE '%markdown%' OR lower(hypothesis) LIKE '%rainwear%' ORDER BY exp_id LIMIT 3`);
+  }catch(e){}
+  bindAiBuild('aib-pr',{
+    defaultScope:'all',
+    title:'Rate the book — then tell merchandising what to do next',
+    hint:'Promotions, vendor price changes, and markdown efficacy in one brief. Grounded in this pipeline so the section improves week to week, not just reports.',
+    placeholder:'Ask about a promo window, the 8/1 increase, pre-buy, or whether markdowns are earning their keep — or leave blank for a scorecard.',
+    chips:['Score the 8/1 Carhartt increase','Are we over-promoting vs marking down?','What should we change before the next event posts?'],
+    facts:()=>({
+      eventCount: pipe.length,
+      overdue: overdue.length,
+      upcoming: upcoming.slice(0,6).map(r=>({id:r.event_id, type:r.event_type, vendor:r.vendor_name, effective:String(r.effective_date).slice(0,10), state:r.workflow_state, tasksOverdue:+r.tasks_overdue})),
+      promoEvents: pipe.filter(r=>r.event_type==='PromoStart'||r.event_type==='PromoEnd').length,
+      vendorIncreases: pipe.filter(r=>r.event_type==='VendorIncrease').length,
+      markdownEvents: pipe.filter(r=>r.event_type==='Markdown').length,
+      taskOverdue: tOver,
+      annDelta, pbSav, pbCash,
+      impactTop: impact.slice(0,5).map(r=>({style:r.brand+' '+r.style_name, oldM:r.old_margin_pct, newM:r.new_margin_pct, yr:r.annual_margin_delta})),
+      sellThrough: mdLast? +mdLast.cum_sell_through_pct : null,
+      floorBreaches: mdFloor,
+      expDecision: (mdExps[0]||{}).decision,
+      expHypothesis: (mdExps[0]||{}).hypothesis
+    })
+  });
 },
 async comms(){
   const s=await runQ(`SELECT status, count(*) n FROM ${S}.task_board_v GROUP BY 1 ORDER BY n DESC`);
