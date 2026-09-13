@@ -67,8 +67,8 @@ const SECTIONS=[
   subs:[{id:'ov-exec',label:'Executive summary'},{id:'ov-inv',label:'Inventory & service'},
         {id:'ov-margin',label:'Margin & pricing'},{id:'ov-ops',label:'Operations & vendors'}]},
  {id:'planning', label:'Planning & Purchasing',
-  note:'Forecast → order timing → proposed POs, then continuous replenishment against observed lead times. PO Generator is the bulk approve / delay / handoff queue before NetSuite.',
-  subs:[{id:'demand',label:'Demand Planning'},{id:'replen',label:'Replenishment'},{id:'pogen',label:'PO Generator', under:'replen'}]},
+  note:'Forecast → weather window you can still act on → order timing → proposed POs, then replenishment against observed lead times.',
+  subs:[{id:'demand',label:'Demand Planning'},{id:'wxopp',label:'Weather opportunities'},{id:'replen',label:'Replenishment'},{id:'pogen',label:'PO Generator', under:'replen'}]},
  {id:'operations', label:'Operations',
   note:'The engine matches PO → receiver → invoice nightly. Analysis explains the close; Exception triage is the bulk queue that writes NetSuite.',
   subs:[{id:'match',label:'3-Way Match analysis'},{id:'matchq',label:'Exception triage', under:'match'}]},
@@ -128,7 +128,7 @@ function table(rows, cols){
   return `<div class="tblwrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 function statusChip(s){
-  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue','Proposed':'gray','Delay':'orange','Review':'purple','Assigned':'blue','Exported':'green','Clear':'green','Debit':'blue','Posted':'green','PriceVariance':'orange','QtyShort':'red','Freight':'purple','CostVariance':'orange'};
+  const map={'PendingReview':'orange','DebitMemoSent':'blue','Resolved':'green','AutoCleared':'green','Open':'gray','Accepted':'green','Declined':'red','Suggested':'gray','Approved':'blue','InTransit':'purple','Received':'green','Done':'green','Overdue':'red','InProgress':'blue','MeatBreak':'red','FringeBreak':'orange','Intact':'green','Order':'blue','TransferFirst':'purple','ExpediteCheck':'red','Hold':'gray','Late 7+':'red','Late':'orange','On time':'green','Early':'blue','Proposed':'gray','Delay':'orange','Review':'purple','Assigned':'blue','Exported':'green','Clear':'green','Debit':'blue','Posted':'green','PriceVariance':'orange','QtyShort':'red','Freight':'purple','CostVariance':'orange','Transfer':'purple','Expedite':'red','Event buy':'blue','Watch':'gray','Too late':'red'};
   return `<span class="chip ${map[s]||'gray'}">${esc(s)}</span>`;
 }
 function build(){
@@ -258,7 +258,7 @@ const SHELLS={
   <div class="card mt"><h3>Statements blocking payment</h3><div class="hint">A statement is payable only when its exceptions are closed — or paid net of debit memos.</div><div id="ovo-tbl"><div class="loading">{ LOADING }</div></div></div>`,
 demand:m=>header(m,'Demand Planning','Forecasted demand becomes purchase timing: slice the timeline, layer the weather signal where there is still time to react, and generate the PO proposal.')+`
   <div class="steps">
-    <div class="step"><span class="sn">1</span><div><b>See demand</b><div>Slice the forecast by week, category, vendor, store. Weather splits into still-reactable vs already missed.</div></div></div>
+    <div class="step"><span class="sn">1</span><div><b>See demand</b><div>Slice the forecast. Storm-driven categories belong on <a href="#" onclick="show('wxopp');return false">Weather opportunities</a> — the 4–10 day window, not the 8-week chart.</div></div></div>
     <div class="step"><span class="sn">2</span><div><b>Flip to order-by week</b><div>Demand shifted back by observed lead time — this is when the PO must leave, not when the sale lands.</div></div></div>
     <div class="step"><span class="sn">3</span><div><b>Generate the proposal</b><div>Then bulk-approve it in Replenishment → PO Generator so NetSuite receives a decision, not a dashboard export.</div></div></div>
   </div>
@@ -287,6 +287,44 @@ demand:m=>header(m,'Demand Planning','Forecasted demand becomes purchase timing:
     <div class="controls" id="sd-controls"></div>
     <div class="chartbox tall"><canvas id="ch-size"></canvas></div>
     <div class="legend" id="sd-note"></div>
+  </div>`,
+wxopp:m=>header(m,'Weather opportunities','A 10-day forecast has skill. An 8-week chart does not. This page keeps only the window that is far enough to move goods and close enough to trust — then overlays it on stores already short in rain-lift categories.')+`
+  <div class="steps steps-4">
+    <div class="step"><span class="sn">1</span><div><b>Lock the skill window</b><div>Days 4–10: reliable enough to act, still inside a transfer or expedite clock. Inside 3 days is nowcast. Past 14 is climatology.</div></div></div>
+    <div class="step"><span class="sn">2</span><div><b>Where weather hits a shortage</b><div>Not rain in the Northwest. Which stores are already broken on meat sizes in the categories that lift when it rains.</div></div></div>
+    <div class="step"><span class="sn">3</span><div><b>Pick the play</b><div>Transfer from a dry sister store, expedite if lead fits, or accept lost sales. Do not raise a seasonal PO on a 10-day signal.</div></div></div>
+    <div class="step"><span class="sn">4</span><div><b>Hand it to a queue</b><div>Transfers go to Replenishment. Buys go to PO Generator. Weather is a trigger, not a report.</div></div></div>
+  </div>
+  <div class="kpis mt autoload" id="wx-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
+  <div class="card focus mt">
+    <h3>Forecast skill ribbon — what we will and will not buy against</h3>
+    <div class="hint">0–3 day nowcast is too late to buy from a vendor; 4–10 days is the commercial window; 11–14 days is watch-only; beyond that the event dissolves into seasonal climate. Observed vendor lead time still has to fit inside the same window.</div>
+    <div class="wx-ribbon" id="wx-ribbon"></div>
+    <div class="controls" id="wx-controls"></div>
+  </div>
+  <div class="row37 mt">
+    <div class="card">
+      <h3>Network — weather lift vs shortage</h3>
+      <div class="hint">Bubble size = weather-adjusted units in the selected window. Red = meat-size breaks in weather-sensitive categories. Click a store for the play.</div>
+      <div style="position:relative"><div id="wx-map"></div><div class="maptip" id="wxtip"></div></div>
+      <div class="legend" id="wx-map-legend"></div>
+    </div>
+    <div class="card" id="wx-side"><div class="loading">{ SELECT A STORE }</div></div>
+  </div>
+  <div class="row2 mt">
+    <div class="card"><h3>Weather units by week and band</h3><div class="hint">Green = still inside the skill window. Gray = too far to event-buy. Red = already missed the order-by date for that vendor.</div><div class="chartbox"><canvas id="ch-wx-weeks"></canvas></div></div>
+    <div class="card"><h3>Which categories actually lift</h3><div class="hint">Weather sensitivity is empirical: share of forecast that is weather-adj, not a label on the style file.</div><div class="chartbox"><canvas id="ch-wx-cats"></canvas></div></div>
+  </div>
+  <div class="card mt">
+    <h3>Opportunity board — store × category in this window</h3>
+    <div class="hint">Transfer-first when vendor lead is longer than days-to-event. Event-buy only when the skill window still covers observed P50 lead.</div>
+    <div class="pg-tabs" id="wx-tabs"></div>
+    <div id="wx-tbl"><div class="loading">{ LOADING }</div></div>
+    <div class="pg-actions" style="margin-top:12px;margin-bottom:0">
+      <button class="btn ghost" onclick="show('replen')">Send transfers to Replenishment</button>
+      <button class="btn" onclick="show('pogen')">Event-buy in PO Generator</button>
+      <span style="font-size:12px;color:var(--sub);align-self:center">A play that stays on this map is still BI.</span>
+    </div>
   </div>`,
 replen:m=>header(m,'Purchase Planning &amp; Replenishment','Continuous ROP review, size-run break detection, transfer-first suggestions, PO consolidation to tier breaks — and the network map.')+`
   <div class="kpis autoload" id="rep-kpis"></div>
@@ -411,8 +449,7 @@ pricing:m=>header(m,'Pricing &amp; Promotion','Vendor price files in → staged 
     <div class="step"><span class="sn">3</span><div><b>Write NetSuite + stores</b><div>Approved events stage the price, spawn retag tasks, and draft the change digest. That is the operational effect.</div></div></div>
   </div>
   <div class="kpis autoload mt" id="pr-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus mt" id="aib-pr-card"></div>
-  <div class="card mt" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
+  <div class="card focus" id="pr-pipe"><div class="loading">{ LOADING }</div></div>
   <div class="row2 mt">
     <div class="card"><h3>Margin impact preview — Carhartt increase, effective 8/1</h3><div class="hint">Cost +5.5%, retail +10% staged from the vendor 832 file. Bars: margin % before vs after. The follow-the-retail decision is explicit, not accidental.</div><div class="chartbox"><canvas id="ch-pr-impact"></canvas></div><div class="legend" id="pr-impact-note"></div></div>
     <div class="card"><h3>Pre-buy option — announced increases</h3><div class="hint">Buy at today's cost before the effective date, capped at a 6-weeks-of-supply guardrail so a price play never becomes a markdown problem.</div><div class="chartbox"><canvas id="ch-pr-prebuy"></canvas></div><div class="legend" id="pr-prebuy-note"></div></div>
@@ -432,8 +469,7 @@ markdown:m=>header(m,'Markdown Management','Fewer, later, smarter markdowns: sel
     <div class="step"><span class="sn">3</span><div><b>Execute in stores</b><div>Label files and checklist tasks print locally and track to done. That is the operational effect.</div></div></div>
   </div>
   <div class="kpis autoload mt" id="md-kpis"><div class="loading">{ LOADING FROM DATABRICKS }</div></div>
-  <div class="card focus mt" id="aib-md-card"></div>
-  <div class="card mt">
+  <div class="card focus">
     <h3>Rainwear season — sell-through vs the ladder</h3>
     <div class="hint">Weekly units (bars) and cumulative sell-through (line, right axis) against the MD-001 trigger. Orange markers = ladder steps. The question the chart answers: did we mark down because the season said so, or because the calendar did?</div>
     <div class="chartbox tall"><canvas id="ch-md-season"></canvas></div>
@@ -508,121 +544,6 @@ refedit:m=>header(m,'Reference Tables','The tables merchandising owns by hand �
     <textarea id="ref-sql" style="display:none;width:100%;height:180px;margin-top:12px;font-family:Consolas,monospace;font-size:11px;border:1px solid #C9D6EC;border-radius:8px;padding:10px"></textarea>
   </div>`,
 };
-
-function aiBuildParse(raw){
-  let t=raw;
-  if(t&&typeof t==='object') t=t.text??t.content??t.answer??JSON.stringify(t);
-  t=String(t||'').trim();
-  const fence=t.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const blob=fence?fence[1]:t;
-  const start=blob.indexOf('{'), end=blob.lastIndexOf('}');
-  if(start>=0&&end>start){
-    try{ return JSON.parse(blob.slice(start,end+1)); }catch(e){}
-  }
-  return null;
-}
-function aiBuildFallback(scope, facts, q){
-  const f=facts||{};
-  const overdue=+f.overdue||0, tOver=+f.taskOverdue||0, sell=+f.sellThrough||0, floor=+f.floorBreaches||0;
-  const promoN=+f.promoEvents||0, delta=+f.annDelta||0, pbSav=+f.pbSav||0;
-  const all=scope==='all';
-  const ratings=[];
-  if(all||scope==='promo') ratings.push({topic:'Promotions', score: promoN&&!tOver?7: promoN?5:6, label: tOver?'Execution leak':'Usable',
-    why: promoN? `${promoN} promo events in the pipeline`+(tOver?`, ${tOver} store tasks overdue — the offer is better than the follow-through.`:'. Coordinate POS, endcap and labels or the lift never hits the floor.'): 'No live PromoStart/PromoEnd in the current window — treat vendor increases as the promo calendar until one is staged.'});
-  if(all||scope==='price') ratings.push({topic:'Price changes', score: overdue?4: (delta>0?8:6), label: overdue?'Not staged':'Follow-the-retail',
-    why: overdue? `${overdue} events overdue — not staged in NetSuite. Margin math is theoretical until Step 3 writes the file.` : `Staged 8/1 follow-the-retail is worth ${fmt$(delta)}/yr. Pre-buy on the table: ${fmt$(pbSav)} inside the 6-week guardrail.`});
-  if(all||scope==='markdown') ratings.push({topic:'Markdown efficacy', score: floor?5: (sell>=60?8:6), label: sell>=60?'Trigger working':'Watch the ladder',
-    why: `Rainwear sell-through ${sell||'—'}% vs the 60% trigger.`+(floor? ` ${floor} ladder steps sit below the margin floor — those are liquidation, not merchandising.`:' Floor is holding.')+(f.expDecision? ` Latest test: ${f.expDecision}.`:'')});
-  const next=[];
-  if(overdue) next.push({action:'Stage the overdue price/promo events in NetSuite before the effective date slips another day.', owner:'Pricing ops'});
-  if(tOver) next.push({action:'Clear overdue retag/endcap tasks — Communications already has the checklist.', owner:'Store ops'});
-  if(pbSav>0 && scope!=='markdown') next.push({action:'Approve or kill the 6-week pre-buy on announced increases so cash is not sitting in a maybe.', owner:'Buyer'});
-  if(floor) next.push({action:'Drop or delay the below-floor ladder steps; keep MD-004 delayed-ladder test as the default for rainwear-like categories.', owner:'Merch director'});
-  if(sell && sell<60) next.push({action:'Do not fire the next markdown step on the calendar. Recheck sell-through next week.', owner:'Planning'});
-  if(!next.length) next.push({action:'Log this scorecard against next month’s events so ratings become a trend, not a one-off read.', owner:'Merch ops'});
-  const takeaways=[
-    q? `You asked: “${q}”. Guidance below stays inside the governed price/promo/markdown facts on this page.` : 'Blank prompt = scorecard on the live pipeline. This is qualitative overlay, not a replacement for the charts.',
-    'A high rating that is not posted to NetSuite or executed in stores is still a dashboard. The numbered next steps are the operational effect.'
-  ];
-  return {ratings, takeaways, next_steps: next};
-}
-function aiBuildRender(el, brief){
-  const tone=s=> s>=8?'var(--green)': s>=6?'var(--navy)': s>=4?'var(--orange)':'var(--red)';
-  const rates=(brief.ratings||[]).map(r=>`<div class="aib-rate"><div class="topic">${esc(r.topic)}</div>
-    <div class="score" style="color:${tone(+r.score)}">${Number(r.score).toFixed(0)}<span>/10</span></div>
-    <div class="chip ${+r.score>=8?'green':+r.score>=6?'blue':+r.score>=4?'orange':'red'}">${esc(r.label||'')}</div>
-    <div class="why" style="margin-top:6px">${esc(r.why||'')}</div></div>`).join('');
-  const takes=(brief.takeaways||[]).map(t=>`<p>${esc(t)}</p>`).join('');
-  const steps=(brief.next_steps||[]).map((s,i)=>`<li><span class="sn">${i+1}</span><div>${esc(s.action||s)}${s.owner?`<span class="own">${esc(s.owner)}</span>`:''}</div></li>`).join('');
-  el.innerHTML=`<div class="aib-rates">${rates}</div>
-    <h3 style="margin:4px 0 6px">Suggestions</h3>${takes||'<p class="hint">No additional narrative.</p>'}
-    <h3 style="margin:12px 0 6px">Next steps</h3><ol class="aib-ns">${steps}</ol>`;
-}
-function bindAiBuild(id, opts){
-  const scopes=opts.scopes||[
-    {id:'all', label:'Full scorecard'},
-    {id:'promo', label:'Promotions'},
-    {id:'price', label:'Price changes'},
-    {id:'markdown', label:'Markdown efficacy'},
-  ];
-  let scope=opts.defaultScope||'all';
-  const card=document.getElementById(id+'-card');
-  if(!card) return;
-  card.classList.add('aibuild');
-  card.innerHTML=`<div class="aib-head">
-      <div><div class="aib-brand">AI Build</div>
-        <h3>${esc(opts.title||'Qualitative guidance')}</h3>
-        <div class="hint">${opts.hint||'Ratings, suggestions and numbered next steps grounded in the events on this page — so the section keeps improving, not just reporting.'}</div></div>
-      <span class="chip purple">continuous improvement</span>
-    </div>
-    <div class="pg-tabs" id="${id}-scopes"></div>
-    <div class="askform" style="margin-top:2px">
-      <textarea id="${id}-q" placeholder="${esc(opts.placeholder||'Ask about a promo, a vendor increase, or markdown timing — or leave blank for a scorecard.')}"></textarea>
-      <button class="btn" id="${id}-go">Generate</button>
-    </div>
-    <div class="chips" id="${id}-chips"></div>
-    <div id="${id}-out" class="aib-out"><div class="hint" style="margin:0">Pick a lens, optionally type a question, then Generate. The model reads the pipeline facts below — it does not invent a second set of numbers.</div></div>`;
-  const tabs=document.getElementById(id+'-scopes');
-  function paintTabs(){
-    tabs.innerHTML=scopes.map(s=>`<button data-s="${s.id}" class="${scope===s.id?'active':''}">${s.label}</button>`).join('');
-    tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>{ scope=b.dataset.s; paintTabs(); });
-  }
-  paintTabs();
-  const chips=opts.chips||['Score the 8/1 Carhartt increase','Are we over-promoting vs marking down?','What should we change before the next ladder step?'];
-  document.getElementById(id+'-chips').innerHTML=chips.map(c=>`<button type="button">${esc(c)}</button>`).join('');
-  document.querySelectorAll('#'+id+'-chips button').forEach(b=>b.onclick=()=>{
-    document.getElementById(id+'-q').value=b.textContent; generate();
-  });
-  async function generate(){
-    const q=document.getElementById(id+'-q').value.trim();
-    const btn=document.getElementById(id+'-go');
-    const out=document.getElementById(id+'-out');
-    btn.disabled=true; btn.textContent='…';
-    out.innerHTML='<div class="loading" style="padding:16px">{ AI BUILD SCORING THE PIPELINE }</div>';
-    const facts=typeof opts.facts==='function'? opts.facts(): (opts.facts||{});
-    const prompt=`You are AI Build for Work World merchandising (workwear, 38 stores, direct-to-store).
-Return ONLY JSON (no markdown fences) with this shape:
-{"ratings":[{"topic":"","score":0,"label":"","why":""}],"takeaways":[""],"next_steps":[{"action":"","owner":""}]}
-Rules:
-- 2–4 ratings, each score 1–10 integer, short label (two words), why citing ONLY the FACTS.
-- takeaways: 2–4 sentences of qualitative guidance for continuous improvement.
-- next_steps: 3 numbered operational actions with an owner (Buyer, Pricing ops, Store ops, Merch director, Planning).
-- Lens: ${scope}. User question (may be empty): ${q||'(scorecard)'}
-- Do not invent SKUs, dollars, or dates that are not in FACTS. If a field is missing, say the gap is the next step.
-
-FACTS
-${JSON.stringify(facts)}`;
-    let brief=null;
-    try{
-      const raw=await askLLM(prompt);
-      brief=aiBuildParse(raw);
-    }catch(e){ brief=null; }
-    if(!brief||!Array.isArray(brief.ratings)) brief=aiBuildFallback(scope, facts, q);
-    aiBuildRender(out, brief);
-    btn.disabled=false; btn.textContent='Generate';
-  }
-  document.getElementById(id+'-go').onclick=generate;
-}
 
 // ---------------- loaders ----------------
 const LOADERS={
@@ -1077,6 +998,246 @@ async demand(){
   document.getElementById('sd-brand').onchange=render;
   brandOpts(); render();
 },
+
+async wxopp(){
+  const day0=Date.parse(ANCHOR+'T00:00:00Z');
+  const daysOut=d=>Math.round((Date.parse(String(d).slice(0,10)+'T00:00:00Z')-day0)/86400000);
+  function bandOf(d){
+    if(d<=3) return 'now';
+    if(d<=10) return 'skill';
+    if(d<=14) return 'watch';
+    return 'climate';
+  }
+  const BANDS={
+    now:{lo:-2,hi:3,label:'Nowcast 0–3d', hint:'Too late to buy from a vendor. Transfer only.'},
+    skill:{lo:4,hi:10,label:'Skill window 4–10d', hint:'The commercial window: skillful forecast and still time to move goods.'},
+    watch:{lo:11,hi:14,label:'Degrading 11–14d', hint:'Signal is fading. Watch lists, not event POs.'},
+    climate:{lo:15,hi:60,label:'Climatology 15d+', hint:'Seasonal shape. Do not raise a storm PO this far out.'},
+  };
+  let TL=[], V=[], RQ=[];
+  try{
+    TL=await runQ(`SELECT * FROM ${S}.demand_timeline_v`);
+    V=await runQ(`SELECT * FROM ${S}.store_variance_v`);
+    RQ=await runQ(`SELECT store_id, action, days_to_stockout, brand, style_name FROM ${S}.replen_queue_v`);
+  }catch(e){
+    document.getElementById('wx-kpis').insertAdjacentHTML('beforebegin',
+      '<div class="warnbox">Warehouse not reachable — showing a sample skill-window board so you can walk the plays.</div>');
+    TL=[
+      {forecast_week:'2026-07-14',order_by_week:'2026-06-23',store_id:'S01',store_name:'Fargo',climate_zone:'Cold',category:'Outerwear',brand:'Carhartt',vendor_name:'Carhartt',lead_days_p50:'21',forecast_units:'40',weather_adj_units:'18',weather_adj_cost:'1400',weather_reactable:'false'},
+      {forecast_week:'2026-07-21',order_by_week:'2026-06-30',store_id:'S01',store_name:'Fargo',climate_zone:'Cold',category:'Outerwear',brand:'Carhartt',vendor_name:'Carhartt',lead_days_p50:'21',forecast_units:'38',weather_adj_units:'22',weather_adj_cost:'1710',weather_reactable:'false'},
+      {forecast_week:'2026-07-21',order_by_week:'2026-07-14',store_id:'S04',store_name:'Duluth',climate_zone:'Cold',category:'Footwear',brand:'Wolverine',vendor_name:'Wolverine',lead_days_p50:'14',forecast_units:'20',weather_adj_units:'14',weather_adj_cost:'1340',weather_reactable:'true'},
+      {forecast_week:'2026-07-21',order_by_week:'2026-07-16',store_id:'S08',store_name:'Bismarck',climate_zone:'Cold',category:'Outerwear',brand:'Helly Hansen',vendor_name:'Helly Hansen',lead_days_p50:'12',forecast_units:'16',weather_adj_units:'19',weather_adj_cost:'1210',weather_reactable:'true'},
+      {forecast_week:'2026-07-28',order_by_week:'2026-07-07',store_id:'S12',store_name:'Des Moines',climate_zone:'Midwest',category:'Outerwear',brand:'Carhartt',vendor_name:'Carhartt',lead_days_p50:'21',forecast_units:'30',weather_adj_units:'6',weather_adj_cost:'460',weather_reactable:'false'},
+      {forecast_week:'2026-08-04',order_by_week:'2026-07-14',store_id:'S22',store_name:'Sioux Falls',climate_zone:'Midwest',category:'Tops',brand:'Red Kap',vendor_name:'Red Kap',lead_days_p50:'21',forecast_units:'44',weather_adj_units:'1',weather_adj_cost:'22',weather_reactable:'true'},
+    ];
+    V=[
+      {store_id:'S01',store_name:'Fargo',latitude:'46.88',longitude:'-96.79',category:'Outerwear',brand:'Carhartt',size:'L',outs:'4',meat_outs:'3',lost_sales:'1800',positions:'12',actual_units:'80',expected_units:'70'},
+      {store_id:'S04',store_name:'Duluth',latitude:'46.79',longitude:'-92.10',category:'Footwear',brand:'Wolverine',size:'10',outs:'3',meat_outs:'2',lost_sales:'960',positions:'8',actual_units:'40',expected_units:'38'},
+      {store_id:'S08',store_name:'Bismarck',latitude:'46.81',longitude:'-100.78',category:'Outerwear',brand:'Helly Hansen',size:'XL',outs:'5',meat_outs:'4',lost_sales:'2100',positions:'6',actual_units:'22',expected_units:'28'},
+      {store_id:'S12',store_name:'Des Moines',latitude:'41.59',longitude:'-93.62',category:'Outerwear',brand:'Carhartt',size:'M',outs:'0',meat_outs:'0',lost_sales:'0',positions:'40',actual_units:'90',expected_units:'88'},
+      {store_id:'S22',store_name:'Sioux Falls',latitude:'43.54',longitude:'-96.73',category:'Tops',brand:'Red Kap',size:'L',outs:'1',meat_outs:'0',lost_sales:'80',positions:'28',actual_units:'50',expected_units:'48'},
+    ];
+    RQ=[{store_id:'S01',action:'ExpediteCheck',days_to_stockout:'4',brand:'Carhartt',style_name:'Jacket'},
+        {store_id:'S08',action:'TransferFirst',days_to_stockout:'6',brand:'Helly Hansen',style_name:'Rain Jacket'}];
+  }
+  TL.forEach(r=>{ r._d=daysOut(r.forecast_week); r._band=bandOf(r._d); r.wx=+r.weather_adj_units||0; r.fc=+r.forecast_units||0; r.lead=+r.lead_days_p50||21; });
+  const catWx={};
+  TL.forEach(r=>{ const k=r.category; catWx[k]=catWx[k]||{cat:k,wx:0,fc:0}; catWx[k].wx+=r.wx; catWx[k].fc+=r.fc; });
+  const sensitive=Object.values(catWx).map(c=>({...c, share:c.fc?c.wx/c.fc:0})).sort((a,b)=>b.share-a.share);
+  const defaultCats=new Set(sensitive.filter(c=>c.share>=0.08 || /rain|outer|foot|boot|weather|wet/i.test(c.cat)).map(c=>c.cat));
+  if(!defaultCats.size) sensitive.slice(0,3).forEach(c=>defaultCats.add(c.cat));
+
+  const inv={};
+  V.forEach(r=>{
+    const k=r.store_id+'|'+r.category;
+    const o=inv[k]=inv[k]||{store_id:r.store_id,store_name:r.store_name,lat:+r.latitude,lon:+r.longitude,category:r.category,outs:0,meat:0,lost:0,pos:0};
+    o.outs+=+r.outs||0; o.meat+=+r.meat_outs||0; o.lost+=+r.lost_sales||0; o.pos+=+r.positions||0;
+  });
+  const loc={};
+  V.forEach(r=>{ loc[r.store_id]=loc[r.store_id]||{store_id:r.store_id,store_name:r.store_name,latitude:r.latitude,longitude:r.longitude}; });
+
+  let windowId='skill', playTab='all', selStore=null;
+  document.getElementById('wx-ribbon').innerHTML=Object.entries(BANDS).map(([id,b])=>
+    `<button type="button" class="wx-seg ${id}" data-w="${id}"><b>${esc(b.label)}</b><span>${esc(b.hint)}</span></button>`).join('');
+  document.getElementById('wx-controls').innerHTML=`
+    <div><label>Categories</label><select id="wx-cat"><option value="">Weather-sensitive (auto)</option>${sensitive.map(c=>`<option value="${esc(c.cat)}">${esc(c.cat)} · ${Math.round(c.share*100)}% wx share</option>`).join('')}</select></div>
+    <div><label>Region</label><select id="wx-reg"><option value="">All zones</option>${uniq(TL.map(r=>r.climate_zone)).sort().map(z=>`<option>${esc(z)}</option>`).join('')}</select></div>`;
+
+  function inWindow(r){
+    const b=BANDS[windowId];
+    return r._d>=b.lo && r._d<=b.hi;
+  }
+  function catOk(r){
+    const c=document.getElementById('wx-cat').value;
+    if(c) return r.category===c;
+    return defaultCats.has(r.category);
+  }
+  function rowsTL(){
+    const z=document.getElementById('wx-reg').value;
+    return TL.filter(r=>inWindow(r)&&catOk(r)&&(!z||r.climate_zone===z));
+  }
+  function plays(){
+    const f=rowsTL();
+    const g={};
+    f.forEach(r=>{
+      const k=r.store_id+'|'+r.category;
+      const o=g[k]=g[k]||{id:k,store_id:r.store_id,store_name:r.store_name,zone:r.climate_zone,category:r.category,
+        wx:0,fc:0,cost:0,lead:r.lead,dMin:99,react:0,n:0};
+      o.wx+=r.wx; o.fc+=r.fc; o.cost+=+r.weather_adj_cost||0; o.n++;
+      o.dMin=Math.min(o.dMin,r._d); o.lead=Math.max(o.lead,r.lead);
+      if(r.weather_reactable==='true'||r.weather_reactable===true) o.react++;
+    });
+    const list=Object.values(g).map(p=>{
+      const i=inv[p.store_id+'|'+p.category]||{outs:0,meat:0,lost:0,pos:0,lat:null,lon:null};
+      p.outs=i.outs; p.meat=i.meat; p.lost=i.lost; p.pos=i.pos;
+      p.lat=i.lat; p.lon=i.lon;
+      p.cover=p.fc>0? +(p.pos/(p.fc/Math.max(p.n,1))).toFixed(1) : 99;
+      const sisters=Object.values(g).filter(s=>s.category===p.category && s.store_id!==p.store_id);
+      const donor=sisters.sort((a,b)=> (inv[b.store_id+'|'+b.category]?.pos||0)-(inv[a.store_id+'|'+a.category]?.pos||0))[0];
+      p.donor=donor? donor.store_id+' '+donor.store_name : '';
+      const leadFits=p.lead<=p.dMin+2;
+      const short=p.meat>0 || p.outs>=2 || p.cover<2;
+      const wxHit=p.wx>=8;
+      if(windowId==='climate' && wxHit) { p.play='Watch'; p.why='Beyond skill — do not event-buy climatology'; }
+      else if(windowId==='now' && short && wxHit){ p.play='Too late'; p.why=p.donor? 'Vendor clock missed — transfer from '+p.donor : 'Event is inside 3 days and we are already short'; }
+      else if(short && wxHit && !leadFits){ p.play='Transfer'; p.why='Observed lead '+p.lead+'d > event in '+p.dMin+'d'+(p.donor? ' · donor '+p.donor:''); }
+      else if(short && wxHit && leadFits){ p.play='Expedite'; p.why='Lead still fits the skill window — event-buy / expedite, not a seasonal raise'; }
+      else if(wxHit && !short){ p.play='Watch'; p.why='Weather lifts demand but cover is healthy — let it sell, do not pile on'; }
+      else { p.play='Watch'; p.why='Signal below action threshold in this window'; }
+      const rq=RQ.filter(x=>x.store_id===p.store_id);
+      if(rq.some(x=>x.action==='ExpediteCheck')) p.queue='Expedite already on replen queue';
+      else if(rq.some(x=>x.action==='TransferFirst')) p.queue='Transfer already suggested';
+      else p.queue='';
+      return p;
+    }).sort((a,b)=> (b.meat-a.meat)|| (b.wx-a.wx));
+    return list;
+  }
+
+  function paintRibbon(){
+    document.querySelectorAll('#wx-ribbon .wx-seg').forEach(b=>{
+      b.classList.toggle('on', b.dataset.w===windowId);
+    });
+  }
+  function kpis(list){
+    const act=list.filter(p=>p.play==='Transfer'||p.play==='Expedite'||p.play==='Too late');
+    const wxU=list.reduce((a,p)=>a+p.wx,0), cost=list.reduce((a,p)=>a+p.cost,0);
+    const meat=list.reduce((a,p)=>a+p.meat,0);
+    document.getElementById('wx-kpis').innerHTML=[
+      ['Window', BANDS[windowId].label.replace(/ .*/,''), BANDS[windowId].hint, ''],
+      ['Weather units', fmtN(Math.round(wxU)), 'in weather-sensitive categories', wxU?'good':''],
+      ['At stores already short', fmtN(act.length), meat+' meat-size breaks in the hit', meat?'warn':''],
+      ['Lift at risk', fmt$(Math.round(cost)), 'weather $ at those locations', cost?'warn':''],
+      ['Too late to buy', fmtN(list.filter(p=>p.play==='Too late').length), 'nowcast + shortage — transfer or miss', ''],
+    ].map(x=>`<div class="kpi ${x[3]}"><div class="lbl">${x[0]}</div><div class="val">${x[1]}</div><div class="sub">${x[2]}</div></div>`).join('');
+  }
+  function renderMap(list){
+    const by={};
+    list.forEach(p=>{
+      const loc1=loc[p.store_id]; if(!loc1) return;
+      const o=by[p.store_id]=by[p.store_id]||{...loc1,wx:0,meat:0,plays:[]};
+      o.wx+=p.wx; o.meat+=p.meat; o.plays.push(p);
+    });
+    const stores=Object.values(by);
+    const host=document.getElementById('wx-map');
+    if(!stores.length){ host.innerHTML='<div class="loading">No stores in this window.</div>'; return; }
+    host.innerHTML=mapSVG2(stores, s=>s.wx, 'hot', selStore);
+    // mapSVG2 mode 'hot' isn't defined - uses default blue. Let me use 'bad' for meat overlay... 
+    // Actually I used 'hot' which falls through to blue. Better color by meat using custom.
+    document.getElementById('wx-map-legend').innerHTML=
+      `<span><span class="dot" style="background:#2E5BFF"></span>Size = weather units in window</span>
+       <span><span class="dot" style="background:#C0392B"></span>Click a store — red meat breaks drive Transfer / Expedite / Too late</span>`;
+    const tip=document.getElementById('wxtip');
+    host.querySelectorAll('circle.store').forEach(c=>{
+      const s=stores[+c.dataset.i];
+      if(s.meat>0){ c.setAttribute('fill','#C0392B'); c.setAttribute('stroke','#C0392B'); }
+      c.addEventListener('mousemove',ev=>{
+        const box=host.getBoundingClientRect();
+        tip.style.display='block'; tip.style.left=(ev.clientX-box.left+14)+'px'; tip.style.top=(ev.clientY-box.top-10)+'px';
+        tip.innerHTML=`<b>${s.store_id} — ${esc(s.store_name)}</b><br>${fmtN(Math.round(s.wx))} wx units · ${s.meat} meat breaks`;
+      });
+      c.addEventListener('mouseleave',()=>tip.style.display='none');
+      c.addEventListener('click',()=>{ selStore=s.store_id; render(); });
+    });
+  }
+  function renderSide(list){
+    const el=document.getElementById('wx-side');
+    if(!selStore){ el.innerHTML='<h3>Store playbook</h3><div class="loading">{ SELECT A STORE }</div>'; return; }
+    const mine=list.filter(p=>p.store_id===selStore);
+    const name=(mine[0]||{}).store_name||selStore;
+    if(!mine.length){ el.innerHTML=`<h3>${esc(selStore)}</h3><p class="hint">No weather-sensitive rows in this window.</p>`; return; }
+    el.innerHTML=`<h3>${esc(selStore)} — ${esc(name)}</h3>
+      <div class="hint">Plays in the ${esc(BANDS[windowId].label)} only. Sister-store donors appear when lead cannot make the event.</div>`+
+      table(mine,[
+        {h:'Category',k:'category'},
+        {h:'Wx units',f:r=>fmtN(Math.round(r.wx)),num:1},
+        {h:'Meat',k:'meat',num:1},
+        {h:'Play',f:r=>statusChip(r.play)},
+        {h:'Why',f:r=>`<span style="font-size:11.5px;color:var(--sub)">${esc(r.why)}</span>`},
+      ])+
+      `<div class="pg-actions" style="margin-top:10px;margin-bottom:0">
+        <button class="btn ghost" onclick="show('replen')">Replenishment</button>
+        <button class="btn" onclick="show('pogen')">PO Generator</button>
+      </div>`;
+  }
+  function renderTbl(list){
+    const labels=[['all','All'],['Expedite','Expedite'],['Transfer','Transfer'],['Too late','Too late'],['Watch','Watch']];
+    const counts={all:list.length};
+    list.forEach(p=>counts[p.play]=(counts[p.play]||0)+1);
+    document.getElementById('wx-tabs').innerHTML=labels.map(([id,lab])=>
+      `<button data-t="${id}" class="${playTab===id?'active':''}">${lab} <b>${counts[id]||0}</b></button>`).join('');
+    document.querySelectorAll('#wx-tabs button').forEach(b=>b.onclick=()=>{ playTab=b.dataset.t; render(); });
+    const vis=playTab==='all'?list:list.filter(p=>p.play===playTab);
+    document.getElementById('wx-tbl').innerHTML=table(vis.slice(0,80),[
+      {h:'Store',f:r=>`<b>${esc(r.store_id)}</b><br><span style="color:var(--sub)">${esc(r.store_name)} · ${esc(r.zone)}</span>`},
+      {h:'Category',k:'category'},
+      {h:'Wx units',f:r=>fmtN(Math.round(r.wx)),num:1},
+      {h:'Meat breaks',k:'meat',num:1},
+      {h:'Days to event',k:'dMin',num:1},
+      {h:'Vendor lead',k:'lead',num:1},
+      {h:'Play',f:r=>statusChip(r.play)},
+      {h:'Why / donor',f:r=>`<span style="font-size:11.5px">${esc(r.why)}</span>${r.queue?'<br><span style="color:var(--purple);font-size:11px">'+esc(r.queue)+'</span>':''}`},
+    ]);
+  }
+  function renderCharts(){
+    const byW={};
+    TL.filter(r=>catOk(r)&&( !document.getElementById('wx-reg').value || r.climate_zone===document.getElementById('wx-reg').value))
+      .forEach(r=>{
+        const w=String(r.forecast_week).slice(0,10);
+        byW[w]=byW[w]||{w,d:r._d,skill:0,watch:0,climate:0,missed:0};
+        const react=r.weather_reactable==='true'||r.weather_reactable===true;
+        if(!react) byW[w].missed+=r.wx;
+        else if(r._band==='skill'||r._band==='now') byW[w].skill+=r.wx;
+        else if(r._band==='watch') byW[w].watch+=r.wx;
+        else byW[w].climate+=r.wx;
+      });
+    const weeks=Object.values(byW).sort((a,b)=>a.w.localeCompare(b.w)).slice(0,12);
+    mkChart('ch-wx-weeks','bar',{labels:weeks.map(w=>w.w.slice(5)+`  D+${w.d}`),datasets:[
+      {label:'Skill / nowcast (reactable)',data:weeks.map(w=>+w.skill.toFixed(0)),backgroundColor:'#1E9E5A',stack:'wx'},
+      {label:'Degrading 11–14d',data:weeks.map(w=>+w.watch.toFixed(0)),backgroundColor:'#C55A11',stack:'wx'},
+      {label:'Climatology 15d+',data:weeks.map(w=>+w.climate.toFixed(0)),backgroundColor:'#9fb0cc',stack:'wx'},
+      {label:'Missed order-by (lead already passed)',data:weeks.map(w=>+w.missed.toFixed(0)),backgroundColor:'#C0392B',stack:'wx'},
+    ]},{scales:{x:{stacked:true},y:{stacked:true,title:{display:true,text:'weather-adj units'}}},plugins:{legend:{labels:{boxWidth:10,font:{size:10}}}}});
+    const cats=sensitive.slice(0,8);
+    mkChart('ch-wx-cats','bar',{labels:cats.map(c=>c.cat),datasets:[
+      {label:'Base forecast',data:cats.map(c=>+c.fc.toFixed(0)),backgroundColor:'#9fb0cc'},
+      {label:'Weather lift',data:cats.map(c=>+c.wx.toFixed(0)),backgroundColor:'#2E5BFF'},
+    ]},{indexAxis:'y',plugins:{legend:{labels:{boxWidth:10}}}});
+  }
+  function render(){
+    paintRibbon();
+    const list=plays();
+    kpis(list);
+    renderMap(list);
+    renderSide(list);
+    renderTbl(list);
+    renderCharts();
+  }
+  document.querySelectorAll('#wx-ribbon .wx-seg').forEach(b=>b.onclick=()=>{ windowId=b.dataset.w; playTab='all'; render(); });
+  document.getElementById('wx-cat').onchange=()=>{ selStore=null; render(); };
+  document.getElementById('wx-reg').onchange=()=>{ selStore=null; render(); };
+  render();
+},
+
 async replen(){
   const q=await runQ(`SELECT action, count(*) n FROM ${S}.replen_queue_v GROUP BY 1 ORDER BY n DESC`);
   document.getElementById('rep-kpis').innerHTML=q.map(r=>`<div class="kpi"><div class="lbl">${esc(r.action)}</div><div class="val">${fmtN(r.n)}</div><div class="sub">in current queue</div></div>`).join('');
@@ -1947,26 +2108,6 @@ async markdown(){
     {h:'Workflow',f:r=>`<span class="chip ${({'Executed':'green','ERP updated':'blue','Announced':'gray','OVERDUE - not staged':'red'})[r.workflow_state]||'gray'}">${esc(r.workflow_state)}</span>`},
     {h:'Labels',f:r=>r.label_file_generated==='true'?'<span class="chip green">Generated</span>':'<span class="chip gray">Pending</span>'},
     {h:'Store tasks',f:r=>+r.tasks_total?`${r.tasks_done}/${r.tasks_total} done`+(+r.tasks_overdue?` · <span style="color:var(--red);font-weight:700">${r.tasks_overdue} overdue</span>`:''):'—'}]);
-  bindAiBuild('aib-md',{
-    defaultScope:'markdown',
-    title:'Score this season — then say what to change',
-    hint:'Markdown efficacy is a test, not a vibe. AI Build rates the ladder against sell-through, the floor, and experiments, then writes the next three actions.',
-    placeholder:'e.g. Should we skip step 2 on rainwear, or is execution the real leak?',
-    chips:['Rate rainwear markdown efficacy','Are we marking down on the calendar or on sell-through?','What should change before the next ladder step?'],
-    facts:()=>({
-      sellThrough: last? +last.cum_sell_through_pct : null,
-      cumUnits: last? +last.cum_units : null,
-      estSupply: last? +last.est_season_supply : null,
-      floorBreaches,
-      policiesActive: pols.filter(p=>p.status==='Active').length,
-      policiesTesting: pols.filter(p=>p.status==='Testing').length,
-      expDecision: (exps[0]||{}).decision,
-      expHypothesis: (exps[0]||{}).hypothesis,
-      evtOverdue, taskOverdue,
-      stepsFired: steps.map(r=>({week:String(r.week_start).slice(0,10), step:r.markdown_step, sell:r.cum_sell_through_pct})),
-      overdueEvents: evts.filter(r=>r.workflow_state==='OVERDUE - not staged').map(r=>({id:r.event_id, scope:r.scope}))
-    })
-  });
 },
 async pricing(){
   const pipe=await runQ(`SELECT * FROM ${S}.price_event_pipeline_v ORDER BY effective_date`);
@@ -2023,36 +2164,6 @@ async pricing(){
     {h:'Tier',k:'sophistication'},
     {h:'Ingestion method',f:r=>`<span class="chip ${r.sophistication==='Tier A'?'green':r.sophistication==='Tier B'?'blue':'orange'}">${esc(r.method)}</span>`},
     {h:'Vendors',k:'n',num:1}]);
-  let mdLast=null, mdFloor=0, mdExps=[];
-  try{
-    const season=await runQ(`SELECT * FROM ${S}.markdown_season_v ORDER BY week_start`);
-    mdLast=season[season.length-1]||null;
-    const lad=await runQ(`SELECT count(*) n FROM ${S}.markdown_ladder_v WHERE below_floor='true'`);
-    mdFloor=+(lad[0]&&lad[0].n||0);
-    mdExps=await runQ(`SELECT decision, hypothesis FROM ${S}.experiments WHERE lower(hypothesis) LIKE '%markdown%' OR lower(hypothesis) LIKE '%rainwear%' ORDER BY exp_id LIMIT 3`);
-  }catch(e){}
-  bindAiBuild('aib-pr',{
-    defaultScope:'all',
-    title:'Rate the book — then tell merchandising what to do next',
-    hint:'Promotions, vendor price changes, and markdown efficacy in one brief. Grounded in this pipeline so the section improves week to week, not just reports.',
-    placeholder:'Ask about a promo window, the 8/1 increase, pre-buy, or whether markdowns are earning their keep — or leave blank for a scorecard.',
-    chips:['Score the 8/1 Carhartt increase','Are we over-promoting vs marking down?','What should we change before the next event posts?'],
-    facts:()=>({
-      eventCount: pipe.length,
-      overdue: overdue.length,
-      upcoming: upcoming.slice(0,6).map(r=>({id:r.event_id, type:r.event_type, vendor:r.vendor_name, effective:String(r.effective_date).slice(0,10), state:r.workflow_state, tasksOverdue:+r.tasks_overdue})),
-      promoEvents: pipe.filter(r=>r.event_type==='PromoStart'||r.event_type==='PromoEnd').length,
-      vendorIncreases: pipe.filter(r=>r.event_type==='VendorIncrease').length,
-      markdownEvents: pipe.filter(r=>r.event_type==='Markdown').length,
-      taskOverdue: tOver,
-      annDelta, pbSav, pbCash,
-      impactTop: impact.slice(0,5).map(r=>({style:r.brand+' '+r.style_name, oldM:r.old_margin_pct, newM:r.new_margin_pct, yr:r.annual_margin_delta})),
-      sellThrough: mdLast? +mdLast.cum_sell_through_pct : null,
-      floorBreaches: mdFloor,
-      expDecision: (mdExps[0]||{}).decision,
-      expHypothesis: (mdExps[0]||{}).hypothesis
-    })
-  });
 },
 async comms(){
   const s=await runQ(`SELECT status, count(*) n FROM ${S}.task_board_v GROUP BY 1 ORDER BY n DESC`);
@@ -2089,7 +2200,7 @@ store_variance_v(store_id, store_name, latitude, longitude, category, brand, siz
 replen_queue_v(suggestion_id, store_id, store_name, sku_id, brand, style_name, color, size, vendor_name, action, suggested_qty, proj_stockout_date, days_to_stockout, reason, tier_break_note, status)
 size_run_health_v(store_id, style_id, brand, style_name, color, sizes_carried, sizes_out, meat_sizes_out, run_status, next_proj_stockout) -- run_status in (Intact, FringeBreak, MeatBreak)
 size_demand_v(store_id, category, brand, size, actual_weekly_units, forecast_weekly_units, size_curve_share, meat_size)
-demand_timeline_v(forecast_week, order_by_week, category, brand, vendor_name, store_id, climate_zone, forecast_units, forecast_cost, forecast_retail, weather_adj_units, weather_adj_cost, weather_adj_retail, weather_reactable)
+demand_timeline_v(forecast_week, order_by_week, category, brand, vendor_name, store_id, climate_zone, forecast_units, forecast_cost, forecast_retail, weather_adj_units, weather_adj_cost, weather_adj_retail, weather_reactable, lead_days_p50)
 forecast_summary_v(forecast_week, category, subcategory, forecast_units, weather_adj_units)
 lead_time_variance_v(vendor_name, requested_ship, quoted_lead_days, actual_lead_days, variance_days) -- one row per PO receipt, 12 months
 exception_queue_v(po_id, invoice_id, vendor_name, store_id, brand, style_name, size, variance_type, variance_amount, age_days, ai_suggested_resolution, status) -- open 3-way match exceptions
@@ -2108,6 +2219,7 @@ task_board_v(task_id, store_id, store_name, task_type, title, related_event, due
 data_health(table_name, source, manually_managed, refresh_cadence, owner, last_load_at)`;
 const ASK_CHIPS=[
  'Which stores are furthest under plan, and in which categories?',
+ 'Where does the 4–10 day weather window hit stores already short on rain-lift categories?',
  'What are stockouts costing us right now?',
  'Which vendors run latest against their quoted lead times?',
  'Show open 3-way match exceptions by cause, with dollars and age.',
